@@ -7,6 +7,11 @@ const connectDB = require('./config/db');
 const authRoutes = require('./routes/auth');
 const { verifyAccessToken } = require('./middlewares/auth');
 const bodyParser = require('body-parser');
+const dns = require('dns');
+const dotenv = require('dotenv');
+
+dotenv.config();
+dns.setServers(["1.1.1.1", "8.8.8.8"]);
 
 const app = express();
 const PORT = process.env.PORT || 5000;
@@ -20,7 +25,7 @@ app.use((req, res, next) => {
 app.use(helmet());
 app.use(cookieParser());
 app.use(cors({
-  origin: process.env.CLIENT_ORIGIN || 'http://localhost:5173',
+  origin: process.env.CLIENT_ORIGIN || 'http://localhost:8080',
   credentials: true
 }));
 
