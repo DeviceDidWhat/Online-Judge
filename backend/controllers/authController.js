@@ -150,7 +150,7 @@ const refreshToken = async (req, res) => {
 };
 
 // LOGOUT
-const logout = async (req, res) => {
+const logout = async (req, res) => {    
   try {
     const token = req.cookies.jid;
     if (token) {
