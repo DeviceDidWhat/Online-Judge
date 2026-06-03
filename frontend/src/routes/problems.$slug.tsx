@@ -20,6 +20,7 @@ import {
   Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription,
 } from "@/components/ui/dialog";
 import { VerdictBadge } from "@/components/verdict-badge";
+import { apiRequest, type ApiSubmission } from "@/lib/api";
 import {
   difficultyClass, languages, problems, submissions as allSubs,
   type Problem, type Verdict,
@@ -59,6 +60,7 @@ function ProblemDetail() {
   const [customInput, setCustomInput] = useState(p.examples[0]?.input ?? "");
   const [bottomTab, setBottomTab] = useState("testcase");
   const [resultId, setResultId] = useState("0000");
+  const [resultSubmission, setResultSubmission] = useState<ApiSubmission | null>(null);
   const [localSubs, setLocalSubs] = useState<LocalSub[]>(
     allSubs.slice(0, 6).map((s) => ({
       id: s.id, verdict: s.verdict, language: s.language,
@@ -84,25 +86,53 @@ function ProblemDetail() {
     }, 900);
   };
 
-  const onSubmit = () => {
+  const onSubmit = async () => {
     setSubmitting(true);
-    setTimeout(() => {
-      const pool: Verdict[] = ["Accepted", "Accepted", "Accepted", "Wrong Answer", "TLE", "MLE", "Runtime Error"];
-      const v = pool[Math.floor(Math.random() * pool.length)];
-      const newId = String(Math.floor(Math.random() * 9000 + 1000));
-      setResultId(newId);
-      setVerdict(v); setShowResult(true); setSubmitting(false);
+    setBottomTab("output");
+    setOutput("Queued for judging...");
+    try {
+      const created = await apiRequest<{ submission: ApiSubmission }>("/submissions", {
+        method: "POST",
+        body: JSON.stringify({
+          problemSlug: p.slug,
+          language: lang,
+          sourceCode: code,
+        }),
+      });
+
+      setResultId(created.submission.submissionId);
+      setOutput(`Submission ${created.submission.submissionId} queued. Waiting for judge...`);
+
+      let latest = created.submission;
+      for (let attempt = 0; attempt < 90; attempt += 1) {
+        await new Promise((resolve) => { setTimeout(resolve, 1000); });
+        const data = await apiRequest<{ submission: ApiSubmission }>(`/submissions/${created.submission.submissionId}`);
+        latest = data.submission;
+        setOutput(`Verdict: ${latest.verdict}\nPassed: ${latest.testcasesPassed ?? 0}/${latest.totalTestcases ?? 0}`);
+        if (latest.verdict !== "Pending") break;
+      }
+
+      const v = latest.verdict as Verdict;
+      setVerdict(v);
+      setResultSubmission(latest);
+      setShowResult(true);
       setLocalSubs((s) => [{
-        id: `sub_${Math.floor(Math.random() * 9000 + 1000)}`,
+        id: latest.submissionId,
         verdict: v,
         language: languages.find((l) => l.id === lang)?.label ?? lang,
-        runtime: Math.floor(Math.random() * 200) + 8,
-        memory: Math.floor(Math.random() * 20) + 6,
-        timestamp: new Date().toISOString(),
+        runtime: latest.runtime ?? 0,
+        memory: latest.memory ?? 0,
+        timestamp: latest.submittedAt,
       }, ...s]);
-      if (v === "Accepted") toast.success("Accepted — all 87 testcases passed 🎉");
+      if (v === "Accepted") toast.success(`Accepted - all ${latest.totalTestcases ?? 0} testcases passed`);
       else toast.error(`Verdict: ${v}`);
-    }, 1200);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Submission failed";
+      setOutput(message);
+      toast.error(message);
+    } finally {
+      setSubmitting(false);
+    }
   };
 
   if (isLoading || !user) {
@@ -376,36 +406,41 @@ function ProblemDetail() {
               {verdict && <VerdictBadge verdict={verdict} />}
               <span>Submission Result</span>
             </DialogTitle>
-            <DialogDescription>Submission #SUB-{resultId}</DialogDescription>
+            <DialogDescription>Submission {resultId}</DialogDescription>
           </DialogHeader>
           {verdict === "Accepted" ? (
             <motion.div initial={{ scale: 0.96, opacity: 0 }} animate={{ scale: 1, opacity: 1 }} className="space-y-3">
               <div className="grid grid-cols-2 gap-3 text-sm">
                 <div className="rounded-lg border border-border/60 p-3">
                   <div className="text-xs text-muted-foreground">Runtime</div>
-                  <div className="text-lg font-semibold text-success">8 ms</div>
-                  <div className="text-xs text-muted-foreground">Beats 96.2%</div>
+                  <div className="text-lg font-semibold text-success">{resultSubmission?.runtime ?? 0} ms</div>
                 </div>
                 <div className="rounded-lg border border-border/60 p-3">
                   <div className="text-xs text-muted-foreground">Memory</div>
-                  <div className="text-lg font-semibold text-success">6.4 MB</div>
-                  <div className="text-xs text-muted-foreground">Beats 87.1%</div>
+                  <div className="text-lg font-semibold text-success">{resultSubmission?.memory ?? 0} MB</div>
                 </div>
               </div>
-              <div className="text-xs text-muted-foreground">All 87 / 87 testcases passed.</div>
+              <div className="text-xs text-muted-foreground">All {resultSubmission?.testcasesPassed ?? 0} / {resultSubmission?.totalTestcases ?? 0} testcases passed.</div>
             </motion.div>
           ) : (
             <div className="text-sm text-muted-foreground space-y-2">
               <div>
-                {verdict === "TLE" && "Your solution exceeded the time limit on testcase 47 / 87."}
-                {verdict === "MLE" && "Your solution exceeded the memory limit (256 MB) on testcase 63 / 87."}
+                {verdict === "TLE" && `Your solution exceeded the time limit on testcase ${resultSubmission?.failedTestcase?.index ?? "?"}.`}
+                {verdict === "MLE" && `Your solution exceeded the memory limit on testcase ${resultSubmission?.failedTestcase?.index ?? "?"}.`}
                 {verdict === "Runtime Error" && "Runtime error on testcase 12 / 87 — SIGSEGV (segmentation fault)."}
-                {verdict === "Wrong Answer" && "Testcase 14 / 87 failed."}
+                {verdict === "Wrong Answer" && `Testcase ${resultSubmission?.failedTestcase?.index ?? "?"} failed.`}
+                {verdict === "Compilation Error" && "Compilation failed."}
               </div>
               <pre className="rounded-md bg-secondary/60 p-3 font-mono text-xs">
-{`Input:    [3,2,4,0]
-Expected: [1,2]
-Got:      [0,2]`}
+{resultSubmission?.compileOutput ||
+`Input:
+${resultSubmission?.failedTestcase?.input ?? ""}
+
+Expected:
+${resultSubmission?.failedTestcase?.expectedOutput ?? ""}
+
+Got:
+${resultSubmission?.failedTestcase?.actualOutput ?? ""}`}
               </pre>
             </div>
           )}

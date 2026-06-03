@@ -1,6 +1,19 @@
 const mongoose = require('mongoose');
 const { Schema } = mongoose;
 
+const testcaseResultSchema = new Schema({
+  index: { type: Number, required: true, min: 1 },
+  verdict: {
+    type: String,
+    enum: ['Accepted', 'Wrong Answer', 'TLE', 'MLE', 'Runtime Error', 'Compilation Error'],
+    required: true,
+  },
+  runtime: { type: Number, min: 0 },
+  memory: { type: Number, min: 0 },
+  stdout: { type: String },
+  stderr: { type: String },
+}, { _id: false });
+
 const submissionSchema = new Schema({
   submissionId: { type: String, required: true, unique: true, trim: true },
   user: { type: Schema.Types.ObjectId, ref: 'User', required: true, index: true },
@@ -27,6 +40,7 @@ const submissionSchema = new Schema({
     actualOutput: String,
     index: Number,
   },
+  testcaseResults: [testcaseResultSchema],
   submittedAt: { type: Date, default: Date.now, index: true },
   judgedAt: { type: Date },
 }, { timestamps: true });

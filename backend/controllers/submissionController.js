@@ -3,7 +3,7 @@ const Problem = require('../models/problem');
 const Submission = require('../models/submission');
 const JudgeJob = require('../models/judgeJob');
 const { asyncHandler, parsePagination, isObjectId } = require('../utils/controller');
-const { updateProgressForSubmission } = require('../utils/problemProgress');
+const { applySubmissionResult } = require('../services/submissionResultService');
 
 const canAccessSubmission = (req, submission) => (
   req.user.role === 'admin' || submission.user.toString() === req.user.id
@@ -80,17 +80,8 @@ const getSubmission = asyncHandler(async (req, res) => {
 });
 
 const updateSubmissionResult = asyncHandler(async (req, res) => {
-  const submission = await Submission.findOneAndUpdate(
-    { submissionId: req.params.id },
-    { ...req.body, judgedAt: new Date() },
-    { new: true, runValidators: true }
-  );
+  const submission = await applySubmissionResult(req.params.id, req.body);
   if (!submission) return res.status(404).json({ message: 'Submission not found' });
-
-  if (submission.verdict === 'Accepted') {
-    await Problem.findByIdAndUpdate(submission.problem, { $inc: { acceptedSubmissions: 1 } });
-  }
-  await updateProgressForSubmission(submission);
 
   res.json({ submission });
 });

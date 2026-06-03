@@ -16,6 +16,7 @@ const judgeJobSchema = new Schema({
   startedAt: { type: Date },
   finishedAt: { type: Date },
   error: { type: String },
+  logs: { type: String },
 }, { timestamps: true });
 
 judgeJobSchema.index({ status: 1, priority: -1, queuedAt: 1 });
