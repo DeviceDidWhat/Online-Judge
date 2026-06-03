@@ -20,4 +20,29 @@ const verifyAccessToken = async (req, res, next) => {
   }
 };
 
-module.exports = { verifyAccessToken };
+const optionalAccessToken = async (req, res, next) => {
+  try {
+    const authHeader = req.headers['authorization'] || '';
+    const token = authHeader.startsWith('Bearer ') ? authHeader.split(' ')[1] : null;
+    if (!token) return next();
+
+    const payload = jwt.verify(token, process.env.JWT_ACCESS_SECRET);
+    req.user = {
+      id: payload.id,
+      email: payload.email,
+      role: payload.role,
+      username: payload.username,
+    };
+    next();
+  } catch {
+    next();
+  }
+};
+
+const requireRole = (...roles) => (req, res, next) => {
+  if (!req.user) return res.status(401).json({ message: 'Authentication required' });
+  if (!roles.includes(req.user.role)) return res.status(403).json({ message: 'Insufficient permissions' });
+  next();
+};
+
+module.exports = { verifyAccessToken, optionalAccessToken, requireRole };
