@@ -1,6 +1,11 @@
 require('dotenv').config();
 const connectDB = require('./config/db');
 const { startJudgeWorker, stopJudgeWorker } = require('./services/judgeWorkerService');
+const dns = require('dns');
+const dotenv = require('dotenv');
+
+dotenv.config();
+dns.setServers(["1.1.1.1", "8.8.8.8"]);
 
 const shutdown = async () => {
   await stopJudgeWorker();

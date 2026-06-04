@@ -1,11 +1,7 @@
-import { createFileRoute, Link, notFound } from "@tanstack/react-router";
-import { useMemo, useState } from "react";
+import { createFileRoute, Link } from "@tanstack/react-router";
+import { useEffect, useMemo, useState } from "react";
 import Editor from "@monaco-editor/react";
-import { motion, AnimatePresence } from "motion/react";
-import {
-  ArrowLeft, Bookmark, ChevronLeft, ChevronRight, History, Lightbulb,
-  Maximize2, Play, RotateCcw, Send, Settings2, Share2, Terminal, ThumbsUp,
-} from "lucide-react";
+import { ArrowLeft, Bookmark, History, Lightbulb, Play, RotateCcw, Send, Terminal } from "lucide-react";
 import { Navbar } from "@/components/navbar";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -13,119 +9,188 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
 import { ResizableHandle, ResizablePanel, ResizablePanelGroup } from "@/components/ui/resizable";
-import {
-  Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle, SheetTrigger,
-} from "@/components/ui/sheet";
-import {
-  Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription,
-} from "@/components/ui/dialog";
+import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle, SheetTrigger } from "@/components/ui/sheet";
+import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { VerdictBadge } from "@/components/verdict-badge";
-import { apiRequest, type ApiSubmission } from "@/lib/api";
-import {
-  difficultyClass, languages, problems, submissions as allSubs,
-  type Problem, type Verdict,
-} from "@/lib/mock-data";
+import { apiRequest, type ApiLanguage, type ApiProblem, type ApiProblemProgress, type ApiSubmission, type ApiVerdict } from "@/lib/api";
+import { difficultyClass } from "@/lib/mock-data";
 import { toast } from "sonner";
 import { useRequireAuth } from "@/lib/auth";
 
 export const Route = createFileRoute("/problems/$slug")({
-  loader: ({ params }): Problem => {
-    const p = problems.find((x) => x.slug === params.slug);
-    if (!p) throw notFound();
-    return p;
-  },
+  head: () => ({ meta: [{ title: "Problem - CodeArena" }] }),
   component: ProblemDetail,
 });
 
-type LocalSub = {
-  id: string;
-  verdict: Verdict;
-  language: string;
-  runtime: number;
-  memory: number;
-  timestamp: string;
+const fallbackLanguages: ApiLanguage[] = [
+  { languageId: "cpp", label: "C++ 17", monaco: "cpp" },
+  { languageId: "c", label: "C", monaco: "c" },
+  { languageId: "python", label: "Python 3.11", monaco: "python" },
+  { languageId: "javascript", label: "JavaScript", monaco: "javascript" },
+  { languageId: "java", label: "Java 17", monaco: "java" },
+];
+
+const formatLanguage = (languages: ApiLanguage[], languageId: string) =>
+  languages.find((item) => item.languageId === languageId)?.label ?? languageId;
+
+const resultText = (submission: ApiSubmission) => {
+  const lines = [
+    `Verdict: ${submission.verdict}`,
+    `Passed: ${submission.testcasesPassed ?? 0}/${submission.totalTestcases ?? 0}`,
+    `Runtime: ${submission.runtime ?? 0} ms`,
+    `Memory: ${submission.memory ?? 0} MB`,
+  ];
+  if (submission.compileOutput) lines.push("", "Compile output:", submission.compileOutput);
+  if (submission.stderr) lines.push("", "stderr:", submission.stderr);
+  if (submission.failedTestcase) {
+    lines.push(
+      "",
+      `Failed testcase ${submission.failedTestcase.index ?? ""}`,
+      "Input:",
+      submission.failedTestcase.input ?? "",
+      "Expected:",
+      submission.failedTestcase.expectedOutput ?? "",
+      "Got:",
+      submission.failedTestcase.actualOutput ?? "",
+    );
+  }
+  return lines.join("\n");
 };
 
 function ProblemDetail() {
   const { isLoading, user } = useRequireAuth();
-  const p = Route.useLoaderData() as Problem;
-  const [lang, setLang] = useState("cpp");
-  const [code, setCode] = useState(p.starterCode[lang] || "// start coding…");
+  const { slug } = Route.useParams();
+  const [problem, setProblem] = useState<ApiProblem | null>(null);
+  const [progress, setProgress] = useState<ApiProblemProgress | null>(null);
+  const [languages, setLanguages] = useState<ApiLanguage[]>(fallbackLanguages);
+  const [lang, setLang] = useState(fallbackLanguages[0].languageId);
+  const [code, setCode] = useState("");
   const [fontSize, setFontSize] = useState(14);
-  const [running, setRunning] = useState(false);
+  const [loadingProblem, setLoadingProblem] = useState(true);
   const [submitting, setSubmitting] = useState(false);
+  const [savingCode, setSavingCode] = useState(false);
   const [output, setOutput] = useState<string | null>(null);
-  const [verdict, setVerdict] = useState<Verdict | null>(null);
+  const [verdict, setVerdict] = useState<ApiVerdict | null>(null);
   const [showResult, setShowResult] = useState(false);
-  const [customInput, setCustomInput] = useState(p.examples[0]?.input ?? "");
+  const [customInput, setCustomInput] = useState("");
   const [bottomTab, setBottomTab] = useState("testcase");
-  const [resultId, setResultId] = useState("0000");
   const [resultSubmission, setResultSubmission] = useState<ApiSubmission | null>(null);
-  const [localSubs, setLocalSubs] = useState<LocalSub[]>(
-    allSubs.slice(0, 6).map((s) => ({
-      id: s.id, verdict: s.verdict, language: s.language,
-      runtime: s.runtime, memory: s.memory, timestamp: s.timestamp,
-    })),
-  );
+  const [submissions, setSubmissions] = useState<ApiSubmission[]>([]);
 
-  const neighbors = useMemo(() => {
-    const i = problems.findIndex((x) => x.slug === p.slug);
-    return { prev: problems[i - 1], next: problems[i + 1] };
-  }, [p.slug]);
+  useEffect(() => {
+    if (!user) return;
+    let cancelled = false;
+    setLoadingProblem(true);
+    Promise.all([
+      apiRequest<{ problem: ApiProblem }>(`/problems/${slug}`),
+      apiRequest<{ languages: ApiLanguage[] }>("/languages"),
+      apiRequest<{ progress: ApiProblemProgress }>(`/problems/${slug}/progress`),
+      apiRequest<{ submissions: ApiSubmission[] }>(`/submissions?problem=${slug}&limit=20`),
+    ])
+      .then(([problemData, languageData, progressData, submissionData]) => {
+        if (cancelled) return;
+        const nextLanguages = languageData.languages.length > 0 ? languageData.languages : fallbackLanguages;
+        const firstLanguage = nextLanguages[0]?.languageId ?? "cpp";
+        const saved = progressData.progress.savedCode?.find((item) => item.language === firstLanguage);
+        setProblem(problemData.problem);
+        setLanguages(nextLanguages);
+        setProgress(progressData.progress);
+        setSubmissions(submissionData.submissions);
+        setLang(firstLanguage);
+        setCode(saved?.code ?? "");
+        setCustomInput(problemData.problem.examples[0]?.input ?? "");
+      })
+      .catch((error) => {
+        if (!cancelled) toast.error(error instanceof Error ? error.message : "Unable to load problem");
+      })
+      .finally(() => {
+        if (!cancelled) setLoadingProblem(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [slug, user]);
+
+  const savedCodeByLanguage = useMemo(() => new Map(
+    progress?.savedCode?.map((item) => [item.language, item.code]) ?? [],
+  ), [progress?.savedCode]);
+
+  const selectLanguage = (value: string) => {
+    setLang(value);
+    setCode(savedCodeByLanguage.get(value) ?? "");
+  };
+
+  const saveCurrentCode = async () => {
+    setSavingCode(true);
+    try {
+      const data = await apiRequest<{ progress: ApiProblemProgress }>(`/problems/${slug}/saved-code`, {
+        method: "PUT",
+        body: JSON.stringify({ language: lang, code }),
+      });
+      setProgress(data.progress);
+      toast.success("Code saved");
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Unable to save code");
+    } finally {
+      setSavingCode(false);
+    }
+  };
+
+  const toggleBookmark = async () => {
+    try {
+      const data = await apiRequest<{ progress: ApiProblemProgress }>(`/problems/${slug}/bookmark`, {
+        method: "POST",
+        body: JSON.stringify({ bookmarked: !progress?.bookmarked }),
+      });
+      setProgress(data.progress);
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Unable to update bookmark");
+    }
+  };
 
   const onRun = () => {
-    setRunning(true); setOutput(null); setBottomTab("output");
-    setTimeout(() => {
-      setRunning(false);
-      setOutput(
-        `▸ Compiling ${languages.find((l) => l.id === lang)?.label}…\n` +
-        `▸ Dispatched to judge node #7\n\n` +
-        `stdout:\n${p.examples[0]?.output ?? "[]"}\n\n` +
-        `Runtime: 12 ms · Memory: 6.4 MB · Exit code 0`,
-      );
-    }, 900);
+    setBottomTab("output");
+    setOutput("Custom run is not available from the current backend API. Use Submit to judge against the official testcases.");
   };
 
   const onSubmit = async () => {
+    if (!code.trim()) {
+      toast.error("Write code before submitting");
+      return;
+    }
+
     setSubmitting(true);
     setBottomTab("output");
     setOutput("Queued for judging...");
     try {
+      await apiRequest<{ progress: ApiProblemProgress }>(`/problems/${slug}/saved-code`, {
+        method: "PUT",
+        body: JSON.stringify({ language: lang, code }),
+      }).catch(() => undefined);
+
       const created = await apiRequest<{ submission: ApiSubmission }>("/submissions", {
         method: "POST",
-        body: JSON.stringify({
-          problemSlug: p.slug,
-          language: lang,
-          sourceCode: code,
-        }),
+        body: JSON.stringify({ problemSlug: slug, language: lang, sourceCode: code }),
       });
 
-      setResultId(created.submission.submissionId);
-      setOutput(`Submission ${created.submission.submissionId} queued. Waiting for judge...`);
-
       let latest = created.submission;
+      setOutput(`Submission ${latest.submissionId} queued. Waiting for judge...`);
+
       for (let attempt = 0; attempt < 90; attempt += 1) {
         await new Promise((resolve) => { setTimeout(resolve, 1000); });
         const data = await apiRequest<{ submission: ApiSubmission }>(`/submissions/${created.submission.submissionId}`);
         latest = data.submission;
-        setOutput(`Verdict: ${latest.verdict}\nPassed: ${latest.testcasesPassed ?? 0}/${latest.totalTestcases ?? 0}`);
+        setOutput(resultText(latest));
         if (latest.verdict !== "Pending") break;
       }
 
-      const v = latest.verdict as Verdict;
-      setVerdict(v);
+      setVerdict(latest.verdict);
       setResultSubmission(latest);
       setShowResult(true);
-      setLocalSubs((s) => [{
-        id: latest.submissionId,
-        verdict: v,
-        language: languages.find((l) => l.id === lang)?.label ?? lang,
-        runtime: latest.runtime ?? 0,
-        memory: latest.memory ?? 0,
-        timestamp: latest.submittedAt,
-      }, ...s]);
-      if (v === "Accepted") toast.success(`Accepted - all ${latest.totalTestcases ?? 0} testcases passed`);
-      else toast.error(`Verdict: ${v}`);
+      setSubmissions((current) => [latest, ...current.filter((item) => item.submissionId !== latest.submissionId)]);
+      if (latest.verdict === "Accepted") toast.success(`Accepted - all ${latest.totalTestcases ?? 0} testcases passed`);
+      else if (latest.verdict === "Pending") toast.warning("Still pending. Check submissions later.");
+      else toast.error(`Verdict: ${latest.verdict}`);
     } catch (error) {
       const message = error instanceof Error ? error.message : "Submission failed";
       setOutput(message);
@@ -135,10 +200,18 @@ function ProblemDetail() {
     }
   };
 
-  if (isLoading || !user) {
+  if (isLoading || !user || loadingProblem) {
     return (
       <div className="grid min-h-screen place-items-center bg-background">
         <div className="h-10 w-10 rounded-full border-2 border-primary border-t-transparent animate-spin" />
+      </div>
+    );
+  }
+
+  if (!problem) {
+    return (
+      <div className="grid min-h-screen place-items-center bg-background text-sm text-muted-foreground">
+        Problem not found.
       </div>
     );
   }
@@ -147,108 +220,86 @@ function ProblemDetail() {
     <div className="flex h-screen flex-col overflow-hidden">
       <Navbar />
 
-      {/* Sticky toolbar */}
       <div className="sticky top-0 z-30 flex items-center justify-between gap-3 border-b border-border/60 bg-background/80 px-4 py-2 backdrop-blur-md">
-        <div className="flex items-center gap-2 min-w-0">
+        <div className="flex min-w-0 items-center gap-2">
           <Button variant="ghost" size="sm" asChild>
             <Link to="/problems"><ArrowLeft className="mr-1 h-4 w-4" />Problems</Link>
           </Button>
           <div className="h-5 w-px bg-border" />
-          <div className="flex items-center gap-1">
-            {neighbors.prev && (
-              <Button variant="ghost" size="icon" asChild className="h-7 w-7">
-                <Link to="/problems/$slug" params={{ slug: neighbors.prev.slug }}><ChevronLeft className="h-4 w-4" /></Link>
-              </Button>
-            )}
-            {neighbors.next && (
-              <Button variant="ghost" size="icon" asChild className="h-7 w-7">
-                <Link to="/problems/$slug" params={{ slug: neighbors.next.slug }}><ChevronRight className="h-4 w-4" /></Link>
-              </Button>
-            )}
-          </div>
-          <h1 className="ml-1 truncate font-semibold">{p.id}. {p.title}</h1>
-          <span className={`text-sm font-medium ${difficultyClass[p.difficulty]}`}>{p.difficulty}</span>
+          <h1 className="ml-1 truncate font-semibold">{problem.problemId}. {problem.title}</h1>
+          <span className={`text-sm font-medium ${difficultyClass[problem.difficulty]}`}>{problem.difficulty}</span>
         </div>
         <div className="flex items-center gap-2">
           <Sheet>
             <SheetTrigger asChild>
               <Button variant="ghost" size="sm" className="gap-1.5">
                 <History className="h-3.5 w-3.5" /> History
-                <Badge variant="secondary" className="ml-1 h-5 px-1.5 text-[10px]">{localSubs.length}</Badge>
+                <Badge variant="secondary" className="ml-1 h-5 px-1.5 text-[10px]">{submissions.length}</Badge>
               </Button>
             </SheetTrigger>
             <SheetContent className="w-[420px] sm:max-w-md">
               <SheetHeader>
                 <SheetTitle>Submission History</SheetTitle>
-                <SheetDescription>Recent attempts for {p.title}</SheetDescription>
+                <SheetDescription>Recent attempts for {problem.title}</SheetDescription>
               </SheetHeader>
               <div className="mt-4 space-y-2 overflow-y-auto pr-1">
-                <AnimatePresence initial={false}>
-                  {localSubs.map((s) => (
-                    <motion.div key={s.id}
-                      initial={{ opacity: 0, y: -8 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0 }}
-                      className="rounded-lg border border-border/60 bg-card/40 p-3 transition-colors hover:bg-card/70">
-                      <div className="flex items-center justify-between">
-                        <VerdictBadge verdict={s.verdict} />
-                        <span className="text-[10px] text-muted-foreground font-mono">#{s.id}</span>
-                      </div>
-                      <div className="mt-2 grid grid-cols-3 gap-2 text-xs">
-                        <div><div className="text-muted-foreground">Lang</div><div className="font-mono">{s.language}</div></div>
-                        <div><div className="text-muted-foreground">Runtime</div><div className="font-mono">{s.runtime} ms</div></div>
-                        <div><div className="text-muted-foreground">Memory</div><div className="font-mono">{s.memory} MB</div></div>
-                      </div>
-                      <div className="mt-1 text-[10px] text-muted-foreground font-mono">{s.timestamp.replace("T", " ").slice(0, 16)}</div>
-                    </motion.div>
-                  ))}
-                </AnimatePresence>
+                {submissions.map((submission) => (
+                  <div key={submission.submissionId} className="rounded-lg border border-border/60 bg-card/40 p-3">
+                    <div className="flex items-center justify-between">
+                      <VerdictBadge verdict={submission.verdict} />
+                      <span className="text-[10px] text-muted-foreground font-mono">#{submission.submissionId}</span>
+                    </div>
+                    <div className="mt-2 grid grid-cols-3 gap-2 text-xs">
+                      <div><div className="text-muted-foreground">Lang</div><div className="font-mono">{formatLanguage(languages, submission.language)}</div></div>
+                      <div><div className="text-muted-foreground">Runtime</div><div className="font-mono">{submission.runtime ?? 0} ms</div></div>
+                      <div><div className="text-muted-foreground">Memory</div><div className="font-mono">{submission.memory ?? 0} MB</div></div>
+                    </div>
+                    <div className="mt-1 text-[10px] text-muted-foreground font-mono">{submission.submittedAt.replace("T", " ").slice(0, 16)}</div>
+                  </div>
+                ))}
               </div>
             </SheetContent>
           </Sheet>
-          <Button variant="ghost" size="icon" className="h-8 w-8"><Bookmark className="h-4 w-4" /></Button>
-          <Button variant="ghost" size="icon" className="h-8 w-8"><Share2 className="h-4 w-4" /></Button>
+          <Button variant={progress?.bookmarked ? "secondary" : "ghost"} size="icon" className="h-8 w-8" onClick={toggleBookmark}>
+            <Bookmark className="h-4 w-4" />
+          </Button>
           <div className="h-5 w-px bg-border" />
-          <Button variant="outline" size="sm" onClick={onRun} disabled={running || submitting}>
+          <Button variant="outline" size="sm" onClick={onRun} disabled={submitting}>
             <Play className="mr-1.5 h-3.5 w-3.5" /> Run
           </Button>
-          <Button size="sm" className="gradient-primary text-primary-foreground" onClick={onSubmit} disabled={running || submitting}>
-            <Send className="mr-1.5 h-3.5 w-3.5" /> {submitting ? "Judging…" : "Submit"}
+          <Button size="sm" className="gradient-primary text-primary-foreground" onClick={onSubmit} disabled={submitting}>
+            <Send className="mr-1.5 h-3.5 w-3.5" /> {submitting ? "Judging..." : "Submit"}
           </Button>
         </div>
       </div>
 
-      {/* Resizable split */}
       <ResizablePanelGroup orientation="horizontal" className="flex-1 min-h-0">
-        {/* LEFT */}
         <ResizablePanel defaultSize={45} minSize={28} className="overflow-hidden">
           <div className="h-full overflow-y-auto">
             <Tabs defaultValue="problem" className="p-4">
               <TabsList className="bg-secondary/60">
                 <TabsTrigger value="problem">Description</TabsTrigger>
                 <TabsTrigger value="hints">Hints</TabsTrigger>
-                <TabsTrigger value="editorial">Editorial</TabsTrigger>
-                <TabsTrigger value="discuss">Discussions</TabsTrigger>
                 <TabsTrigger value="submissions">Submissions</TabsTrigger>
               </TabsList>
 
               <TabsContent value="problem" className="space-y-6 pt-4 text-sm leading-relaxed">
                 <div className="flex flex-wrap gap-1.5">
-                  {p.tags.map((t) => <Badge key={t} variant="secondary">{t}</Badge>)}
-                  <Badge variant="outline" className="text-success border-success/40">Acceptance {p.acceptance}%</Badge>
+                  {problem.tags.map((tag) => <Badge key={tag} variant="secondary">{tag}</Badge>)}
+                  <Badge variant="outline" className="text-success border-success/40">Acceptance {problem.acceptance}%</Badge>
                 </div>
-                <p className="whitespace-pre-line">{p.description}</p>
+                <p className="whitespace-pre-line">{problem.description}</p>
 
                 <div>
                   <h3 className="mb-2 font-semibold">Examples</h3>
                   <div className="space-y-3">
-                    {p.examples.map((ex, i) => (
-                      <motion.div key={i}
-                        initial={{ opacity: 0, y: 6 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: i * 0.05 }}
-                        className="rounded-lg border border-border/60 bg-secondary/40 p-3 font-mono text-xs">
-                        <div className="mb-1 text-[10px] uppercase tracking-wider text-muted-foreground">Example {i + 1}</div>
-                        <div><span className="text-muted-foreground">Input: </span>{ex.input}</div>
-                        <div><span className="text-muted-foreground">Output: </span>{ex.output}</div>
-                        {ex.explanation && <div className="mt-1 text-muted-foreground">Explanation: {ex.explanation}</div>}
-                      </motion.div>
+                    {problem.examples.map((example, index) => (
+                      <div key={index} className="rounded-lg border border-border/60 bg-secondary/40 p-3 font-mono text-xs">
+                        <div className="mb-1 text-[10px] uppercase tracking-wider text-muted-foreground">Example {index + 1}</div>
+                        <div className="whitespace-pre-wrap"><span className="text-muted-foreground">Input:</span> {example.input}</div>
+                        <div className="whitespace-pre-wrap"><span className="text-muted-foreground">Output:</span> {example.output}</div>
+                        {example.explanation && <div className="mt-1 whitespace-pre-wrap text-muted-foreground">Explanation: {example.explanation}</div>}
+                      </div>
                     ))}
                   </div>
                 </div>
@@ -256,60 +307,35 @@ function ProblemDetail() {
                 <div>
                   <h3 className="mb-2 font-semibold">Constraints</h3>
                   <ul className="space-y-1 text-muted-foreground">
-                    {p.constraints.map((c, i) => <li key={i} className="font-mono text-xs">• {c}</li>)}
+                    {problem.constraints.map((constraint, index) => <li key={index} className="font-mono text-xs">- {constraint}</li>)}
                   </ul>
                 </div>
               </TabsContent>
 
               <TabsContent value="hints" className="space-y-3 pt-4">
-                {p.hints.map((h, i) => (
-                  <motion.div key={i}
-                    initial={{ opacity: 0, x: -8 }} animate={{ opacity: 1, x: 0 }} transition={{ delay: i * 0.05 }}
-                    className="flex gap-3 rounded-lg border border-border/60 bg-warning/5 p-3">
+                {problem.hints.length === 0 && <p className="text-sm text-muted-foreground">No hints provided.</p>}
+                {problem.hints.map((hint, index) => (
+                  <div key={index} className="flex gap-3 rounded-lg border border-border/60 bg-warning/5 p-3">
                     <Lightbulb className="h-4 w-4 shrink-0 text-warning" />
                     <div>
-                      <div className="text-[10px] uppercase tracking-wider text-muted-foreground">Hint {i + 1}</div>
-                      <p className="text-sm">{h}</p>
-                    </div>
-                  </motion.div>
-                ))}
-              </TabsContent>
-
-              <TabsContent value="editorial" className="pt-4 text-sm space-y-3">
-                <h3 className="font-semibold">Approach 1 — Hash Map (Optimal)</h3>
-                <p className="text-muted-foreground">
-                  Iterate through the array once. For each element, check whether the complement
-                  (<code className="font-mono text-foreground">target - nums[i]</code>) has been seen before.
-                  A hash map gives O(1) average lookup, so total time complexity is O(n).
-                </p>
-                <div className="grid grid-cols-2 gap-2 text-xs">
-                  <div className="rounded-md border border-border/60 p-2"><div className="text-muted-foreground">Time</div><div className="font-mono">O(n)</div></div>
-                  <div className="rounded-md border border-border/60 p-2"><div className="text-muted-foreground">Space</div><div className="font-mono">O(n)</div></div>
-                </div>
-              </TabsContent>
-
-              <TabsContent value="discuss" className="space-y-3 pt-4">
-                {[1,2,3].map((i) => (
-                  <div key={i} className="rounded-lg border border-border/60 p-3 transition-colors hover:bg-secondary/30">
-                    <div className="text-sm font-medium">Clean {i === 1 ? "C++" : i === 2 ? "Python" : "Java"} solution beats 99%</div>
-                    <div className="mt-1 text-xs text-muted-foreground">by tourist · 2h ago</div>
-                    <div className="mt-2 flex items-center gap-3 text-xs text-muted-foreground">
-                      <span className="inline-flex items-center gap-1"><ThumbsUp className="h-3 w-3" /> {248 - i * 30}</span>
+                      <div className="text-[10px] uppercase tracking-wider text-muted-foreground">Hint {index + 1}</div>
+                      <p className="text-sm">{hint}</p>
                     </div>
                   </div>
                 ))}
               </TabsContent>
 
               <TabsContent value="submissions" className="space-y-2 pt-4">
-                {localSubs.map((s) => (
-                  <div key={s.id} className="flex items-center justify-between rounded-lg border border-border/60 p-3">
+                {submissions.map((submission) => (
+                  <div key={submission.submissionId} className="flex items-center justify-between rounded-lg border border-border/60 p-3">
                     <div className="flex items-center gap-3">
-                      <VerdictBadge verdict={s.verdict} />
-                      <span className="text-xs text-muted-foreground font-mono">{s.language}</span>
+                      <VerdictBadge verdict={submission.verdict} />
+                      <span className="text-xs text-muted-foreground font-mono">{formatLanguage(languages, submission.language)}</span>
                     </div>
-                    <div className="text-xs text-muted-foreground font-mono">{s.runtime}ms · {s.memory}MB</div>
+                    <div className="text-xs text-muted-foreground font-mono">{submission.runtime ?? 0}ms / {submission.memory ?? 0}MB</div>
                   </div>
                 ))}
+                {submissions.length === 0 && <p className="text-sm text-muted-foreground">No submissions yet.</p>}
               </TabsContent>
             </Tabs>
           </div>
@@ -317,40 +343,37 @@ function ProblemDetail() {
 
         <ResizableHandle withHandle />
 
-        {/* RIGHT */}
         <ResizablePanel defaultSize={55} minSize={30} className="overflow-hidden">
           <ResizablePanelGroup orientation="vertical" className="h-full">
-            {/* Editor */}
             <ResizablePanel defaultSize={65} minSize={25} className="flex flex-col">
               <div className="sticky top-0 z-10 flex items-center justify-between gap-2 border-b border-border/60 bg-card/40 px-3 py-1.5 backdrop-blur">
-                <Select value={lang} onValueChange={(v) => { setLang(v); setCode(p.starterCode[v] || "// start coding…"); }}>
-                  <SelectTrigger className="h-7 w-36 bg-card/50 text-xs"><SelectValue /></SelectTrigger>
+                <Select value={lang} onValueChange={selectLanguage}>
+                  <SelectTrigger className="h-7 w-40 bg-card/50 text-xs"><SelectValue /></SelectTrigger>
                   <SelectContent>
-                    {languages.map((l) => <SelectItem key={l.id} value={l.id}>{l.label}</SelectItem>)}
+                    {languages.map((language) => <SelectItem key={language.languageId} value={language.languageId}>{language.label}</SelectItem>)}
                   </SelectContent>
                 </Select>
                 <div className="flex items-center gap-1">
-                  <Button variant="ghost" size="icon" className="h-7 w-7"
-                    onClick={() => { setCode(p.starterCode[lang] || ""); toast.success("Code reset"); }}>
+                  <Button variant="ghost" size="sm" className="h-7" onClick={saveCurrentCode} disabled={savingCode}>
+                    {savingCode ? "Saving..." : "Save"}
+                  </Button>
+                  <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => setCode("")}>
                     <RotateCcw className="h-3.5 w-3.5" />
                   </Button>
-                  <Select value={String(fontSize)} onValueChange={(v) => setFontSize(Number(v))}>
+                  <Select value={String(fontSize)} onValueChange={(value) => setFontSize(Number(value))}>
                     <SelectTrigger className="h-7 w-18 bg-card/50 text-xs"><SelectValue /></SelectTrigger>
                     <SelectContent>
-                      {[12, 13, 14, 15, 16, 18].map((s) => <SelectItem key={s} value={String(s)}>{s}px</SelectItem>)}
+                      {[12, 13, 14, 15, 16, 18].map((size) => <SelectItem key={size} value={String(size)}>{size}px</SelectItem>)}
                     </SelectContent>
                   </Select>
-                  <Button variant="ghost" size="icon" className="h-7 w-7"><Settings2 className="h-3.5 w-3.5" /></Button>
-                  <Button variant="ghost" size="icon" className="h-7 w-7"><Maximize2 className="h-3.5 w-3.5" /></Button>
-                  <span className="ml-1 text-[10px] text-muted-foreground font-mono">Auto-saved</span>
                 </div>
               </div>
               <div className="flex-1 min-h-0">
                 <Editor
                   theme="vs-dark"
-                  language={languages.find((l) => l.id === lang)?.monaco || "plaintext"}
+                  language={languages.find((language) => language.languageId === lang)?.monaco || "plaintext"}
                   value={code}
-                  onChange={(v) => setCode(v ?? "")}
+                  onChange={(value) => setCode(value ?? "")}
                   options={{
                     fontFamily: "JetBrains Mono, monospace",
                     fontSize,
@@ -366,7 +389,6 @@ function ProblemDetail() {
 
             <ResizableHandle withHandle />
 
-            {/* Console */}
             <ResizablePanel defaultSize={35} minSize={12} className="overflow-hidden">
               <Tabs value={bottomTab} onValueChange={setBottomTab} className="h-full p-3 flex flex-col">
                 <TabsList className="bg-secondary/60 self-start">
@@ -375,21 +397,22 @@ function ProblemDetail() {
                 </TabsList>
                 <TabsContent value="testcase" className="flex-1 min-h-0 pt-3">
                   <div className="flex gap-2 mb-2">
-                    {p.examples.map((_, i) => (
-                      <Button key={i} variant="secondary" size="sm" className="h-7 text-xs"
-                        onClick={() => setCustomInput(p.examples[i].input)}>
-                        Case {i + 1}
+                    {problem.examples.map((_, index) => (
+                      <Button key={index} variant="secondary" size="sm" className="h-7 text-xs" onClick={() => setCustomInput(problem.examples[index].input)}>
+                        Case {index + 1}
                       </Button>
                     ))}
                   </div>
-                  <Textarea value={customInput} onChange={(e) => setCustomInput(e.target.value)}
-                    placeholder="Custom input…"
-                    className="h-[calc(100%-2.75rem)] font-mono text-xs bg-secondary/40 resize-none" />
+                  <Textarea
+                    value={customInput}
+                    onChange={(event) => setCustomInput(event.target.value)}
+                    placeholder="Custom input"
+                    className="h-[calc(100%-2.75rem)] font-mono text-xs bg-secondary/40 resize-none"
+                  />
                 </TabsContent>
                 <TabsContent value="output" className="flex-1 min-h-0 pt-3">
                   <pre className="h-full overflow-auto rounded-md border border-border/60 bg-background p-3 font-mono text-xs whitespace-pre-wrap">
-                    {running ? <span className="text-warning animate-pulse">▸ Executing on judge node #7…</span> :
-                     output ?? <span className="text-muted-foreground">Run your code to see output here.</span>}
+                    {output ?? <span className="text-muted-foreground">Submit your code to see the judge verdict here.</span>}
                   </pre>
                 </TabsContent>
               </Tabs>
@@ -398,7 +421,6 @@ function ProblemDetail() {
         </ResizablePanel>
       </ResizablePanelGroup>
 
-      {/* Verdict modal */}
       <Dialog open={showResult} onOpenChange={setShowResult}>
         <DialogContent className="sm:max-w-md">
           <DialogHeader>
@@ -406,44 +428,11 @@ function ProblemDetail() {
               {verdict && <VerdictBadge verdict={verdict} />}
               <span>Submission Result</span>
             </DialogTitle>
-            <DialogDescription>Submission {resultId}</DialogDescription>
+            <DialogDescription>{resultSubmission?.submissionId}</DialogDescription>
           </DialogHeader>
-          {verdict === "Accepted" ? (
-            <motion.div initial={{ scale: 0.96, opacity: 0 }} animate={{ scale: 1, opacity: 1 }} className="space-y-3">
-              <div className="grid grid-cols-2 gap-3 text-sm">
-                <div className="rounded-lg border border-border/60 p-3">
-                  <div className="text-xs text-muted-foreground">Runtime</div>
-                  <div className="text-lg font-semibold text-success">{resultSubmission?.runtime ?? 0} ms</div>
-                </div>
-                <div className="rounded-lg border border-border/60 p-3">
-                  <div className="text-xs text-muted-foreground">Memory</div>
-                  <div className="text-lg font-semibold text-success">{resultSubmission?.memory ?? 0} MB</div>
-                </div>
-              </div>
-              <div className="text-xs text-muted-foreground">All {resultSubmission?.testcasesPassed ?? 0} / {resultSubmission?.totalTestcases ?? 0} testcases passed.</div>
-            </motion.div>
-          ) : (
-            <div className="text-sm text-muted-foreground space-y-2">
-              <div>
-                {verdict === "TLE" && `Your solution exceeded the time limit on testcase ${resultSubmission?.failedTestcase?.index ?? "?"}.`}
-                {verdict === "MLE" && `Your solution exceeded the memory limit on testcase ${resultSubmission?.failedTestcase?.index ?? "?"}.`}
-                {verdict === "Runtime Error" && "Runtime error on testcase 12 / 87 — SIGSEGV (segmentation fault)."}
-                {verdict === "Wrong Answer" && `Testcase ${resultSubmission?.failedTestcase?.index ?? "?"} failed.`}
-                {verdict === "Compilation Error" && "Compilation failed."}
-              </div>
-              <pre className="rounded-md bg-secondary/60 p-3 font-mono text-xs">
-{resultSubmission?.compileOutput ||
-`Input:
-${resultSubmission?.failedTestcase?.input ?? ""}
-
-Expected:
-${resultSubmission?.failedTestcase?.expectedOutput ?? ""}
-
-Got:
-${resultSubmission?.failedTestcase?.actualOutput ?? ""}`}
-              </pre>
-            </div>
-          )}
+          <pre className="max-h-80 overflow-auto rounded-md bg-secondary/60 p-3 font-mono text-xs whitespace-pre-wrap">
+            {resultSubmission ? resultText(resultSubmission) : ""}
+          </pre>
         </DialogContent>
       </Dialog>
     </div>

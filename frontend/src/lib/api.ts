@@ -17,6 +17,13 @@ export type ApiVerdict =
 export type ApiSubmission = {
   submissionId: string;
   problemTitle: string;
+  problem?: {
+    _id: string;
+    problemId: number;
+    slug: string;
+    title: string;
+    difficulty: ApiDifficulty;
+  };
   language: string;
   verdict: ApiVerdict;
   runtime?: number;
@@ -36,7 +43,53 @@ export type ApiSubmission = {
   judgedAt?: string;
 };
 
+export type ApiDifficulty = "Easy" | "Medium" | "Hard";
+export type ApiProblemStatus = "draft" | "published" | "archived";
+
+export type ApiProblem = {
+  _id: string;
+  problemId: number;
+  slug: string;
+  title: string;
+  difficulty: ApiDifficulty;
+  tags: string[];
+  acceptance: number;
+  premium?: boolean;
+  status: ApiProblemStatus;
+  description: string;
+  constraints: string[];
+  examples: Array<{ input: string; output: string; explanation?: string }>;
+  hints: string[];
+  starterCode?: Record<string, string>;
+  testCases?: Array<{ input: string; expectedOutput: string; hidden?: boolean; order?: number }>;
+  timeLimitMs: number;
+  memoryLimitMb: number;
+  totalSubmissions: number;
+  acceptedSubmissions: number;
+  solved?: boolean;
+  progress?: ApiProblemProgress;
+};
+
+export type ApiProblemProgress = {
+  _id?: string;
+  status: "unsolved" | "attempted" | "solved";
+  bookmarked: boolean;
+  attempts: number;
+  solvedAt?: string;
+  savedCode?: Array<{ language: string; code: string; updatedAt?: string }>;
+};
+
+export type ApiLanguage = {
+  _id?: string;
+  languageId: string;
+  label: string;
+  monaco: string;
+  version?: string;
+  enabled?: boolean;
+};
+
 function readAccessToken() {
+  if (typeof window === "undefined") return undefined;
   try {
     const raw = window.localStorage.getItem(AUTH_STORAGE_KEY);
     return raw ? (JSON.parse(raw) as StoredAuth).accessToken : undefined;

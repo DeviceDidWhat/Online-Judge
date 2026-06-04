@@ -4,6 +4,12 @@ const { asyncHandler, parsePagination, escapeRegExp } = require('../utils/contro
 
 const publicProblemSelect = '-testCases -editorial';
 
+const slugify = (value) => String(value || '')
+  .trim()
+  .toLowerCase()
+  .replace(/[^a-z0-9]+/g, '-')
+  .replace(/^-+|-+$/g, '');
+
 const addUserProgress = async (problems, userId) => {
   if (!userId || problems.length === 0) return problems.map((problem) => problem.toObject());
 
@@ -41,8 +47,9 @@ const listProblems = asyncHandler(async (req, res) => {
     filter.$or = [{ title: regex }, { slug: regex }, { tags: regex }];
   }
 
+  const select = req.user?.role === 'admin' ? '' : publicProblemSelect;
   const [problems, total] = await Promise.all([
-    Problem.find(filter).select(publicProblemSelect).sort({ problemId: 1 }).skip(skip).limit(limit),
+    Problem.find(filter).select(select).sort({ problemId: 1 }).skip(skip).limit(limit),
     Problem.countDocuments(filter),
   ]);
 
@@ -65,8 +72,14 @@ const getProblem = asyncHandler(async (req, res) => {
 });
 
 const createProblem = asyncHandler(async (req, res) => {
+  const problemId = req.body.problemId || ((await Problem.findOne({}).sort({ problemId: -1 }).select('problemId'))?.problemId || 0) + 1;
+  const slug = req.body.slug || slugify(req.body.title);
+  if (!slug) return res.status(400).json({ message: 'A title or slug is required' });
+
   const problem = await Problem.create({
     ...req.body,
+    problemId,
+    slug,
     createdBy: req.user.id,
     updatedBy: req.user.id,
   });
