@@ -56,9 +56,6 @@ function Submissions() {
             <h1 className="text-2xl font-bold">Submissions</h1>
             <p className="text-sm text-muted-foreground">{loadingRows ? "Loading judge results..." : "All your past attempts and their verdicts."}</p>
           </div>
-          <div className="flex items-center gap-2 text-xs text-muted-foreground">
-            <span className="h-2 w-2 rounded-full bg-success animate-pulse-glow" /> Live - Judge queue OK
-          </div>
         </div>
         <Input placeholder="Filter by problem..." value={q} onChange={(e) => setQ(e.target.value)} className="mb-4 max-w-sm bg-card/50" />
         <Card className="overflow-hidden border-border/60">

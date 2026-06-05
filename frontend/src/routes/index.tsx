@@ -29,13 +29,6 @@ function Landing() {
 
         {/* Hero */}
         <section className="mx-auto max-w-7xl px-6 pt-20 pb-28 text-center">
-          <motion.div
-            initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.5 }}
-            className="mx-auto mb-6 inline-flex items-center gap-2 rounded-full border border-border/60 glass px-3 py-1 text-xs text-muted-foreground"
-          >
-            <Sparkles className="h-3.5 w-3.5 text-primary" />
-            New contest format — Weekly 412 starts soon
-          </motion.div>
           <motion.h1
             initial={{ opacity: 0, y: 18 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.6, delay: 0.05 }}
             className="mx-auto max-w-4xl text-5xl font-bold tracking-tight md:text-7xl"
@@ -82,17 +75,17 @@ function Landing() {
                 <span className="ml-auto text-xs text-success font-mono">● Accepted · 4ms · 6.2MB</span>
               </div>
               <pre className="overflow-x-auto p-6 text-left text-sm leading-relaxed font-mono">
-<span className="text-[oklch(0.68_0.20_300)]">class</span> <span className="text-[oklch(0.78_0.16_75)]">Solution</span> {"{"}
-{"\n"}<span className="text-muted-foreground">public:</span>
-{"\n    "}<span className="text-[oklch(0.70_0.16_230)]">vector</span>&lt;<span className="text-[oklch(0.70_0.16_230)]">int</span>&gt; <span className="text-primary">twoSum</span>(<span className="text-[oklch(0.70_0.16_230)]">vector</span>&lt;<span className="text-[oklch(0.70_0.16_230)]">int</span>&gt;& nums, <span className="text-[oklch(0.70_0.16_230)]">int</span> target) {"{"}
-{"\n        "}<span className="text-[oklch(0.68_0.20_300)]">unordered_map</span>&lt;<span className="text-[oklch(0.70_0.16_230)]">int</span>, <span className="text-[oklch(0.70_0.16_230)]">int</span>&gt; seen;
-{"\n        "}<span className="text-[oklch(0.68_0.20_300)]">for</span> (<span className="text-[oklch(0.70_0.16_230)]">int</span> i = <span className="text-warning">0</span>; i &lt; nums.size(); ++i) {"{"}
-{"\n            "}<span className="text-[oklch(0.68_0.20_300)]">if</span> (seen.count(target - nums[i])) {"\n                "}<span className="text-[oklch(0.68_0.20_300)]">return</span> {"{seen[target - nums[i]], i}"};
-{"\n            "}seen[nums[i]] = i;
-{"\n        "}{"}"}
-{"\n        "}<span className="text-[oklch(0.68_0.20_300)]">return</span> {"{}"};
-{"\n    "}{"}"}
-{"\n"}{"}"};
+                <span className="text-[oklch(0.68_0.20_300)]">class</span> <span className="text-[oklch(0.78_0.16_75)]">Solution</span> {"{"}
+                {"\n"}<span className="text-muted-foreground">public:</span>
+                {"\n    "}<span className="text-[oklch(0.70_0.16_230)]">vector</span>&lt;<span className="text-[oklch(0.70_0.16_230)]">int</span>&gt; <span className="text-primary">twoSum</span>(<span className="text-[oklch(0.70_0.16_230)]">vector</span>&lt;<span className="text-[oklch(0.70_0.16_230)]">int</span>&gt;& nums, <span className="text-[oklch(0.70_0.16_230)]">int</span> target) {"{"}
+                {"\n        "}<span className="text-[oklch(0.68_0.20_300)]">unordered_map</span>&lt;<span className="text-[oklch(0.70_0.16_230)]">int</span>, <span className="text-[oklch(0.70_0.16_230)]">int</span>&gt; seen;
+                {"\n        "}<span className="text-[oklch(0.68_0.20_300)]">for</span> (<span className="text-[oklch(0.70_0.16_230)]">int</span> i = <span className="text-warning">0</span>; i &lt; nums.size(); ++i) {"{"}
+                {"\n            "}<span className="text-[oklch(0.68_0.20_300)]">if</span> (seen.count(target - nums[i])) {"\n                "}<span className="text-[oklch(0.68_0.20_300)]">return</span> {"{seen[target - nums[i]], i}"};
+                {"\n            "}seen[nums[i]] = i;
+                {"\n        "}{"}"}
+                {"\n        "}<span className="text-[oklch(0.68_0.20_300)]">return</span> {"{}"};
+                {"\n    "}{"}"}
+                {"\n"}{"}"};
               </pre>
             </div>
           </motion.div>

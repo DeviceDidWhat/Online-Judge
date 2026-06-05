@@ -1,6 +1,7 @@
 import { Link, useNavigate, useRouterState } from "@tanstack/react-router";
 import { Bell, Code2, LogOut, Menu, Moon, Search, Sun, User } from "lucide-react";
-import { useState } from "react";
+import { useEffect, useState, type FormEvent } from "react";
+import { formatDistanceToNow } from "date-fns";
 import { useTheme } from "@/lib/theme";
 import { useAuth } from "@/lib/auth";
 import { Button } from "@/components/ui/button";
@@ -11,7 +12,8 @@ import {
   DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
-import { notifications } from "@/lib/mock-data";
+import { apiRequest, type ApiNotification } from "@/lib/api";
+import { toast } from "sonner";
 
 const nav = [
   { to: "/problems", label: "Problems" },
@@ -25,8 +27,26 @@ export function Navbar({ onToggleSidebar }: { onToggleSidebar?: () => void }) {
   const { theme, toggle } = useTheme();
   const { user, logout } = useAuth();
   const navigate = useNavigate();
-  const path = useRouterState({ select: (s) => s.location.pathname });
-  const [unread] = useState(notifications.filter((n) => n.unread).length);
+  const path = useRouterState({ select: (state) => state.location.pathname });
+  const [query, setQuery] = useState("");
+  const [notifications, setNotifications] = useState<ApiNotification[]>([]);
+  const [unread, setUnread] = useState(0);
+
+  useEffect(() => {
+    if (!user) return;
+    let cancelled = false;
+    apiRequest<{ notifications: ApiNotification[]; unreadCount: number }>("/notifications?limit=10")
+      .then((data) => {
+        if (!cancelled) {
+          setNotifications(data.notifications);
+          setUnread(data.unreadCount);
+        }
+      })
+      .catch(() => undefined);
+    return () => {
+      cancelled = true;
+    };
+  }, [user]);
 
   if (!user) return null;
 
@@ -35,6 +55,35 @@ export function Navbar({ onToggleSidebar }: { onToggleSidebar?: () => void }) {
   const handleLogout = async () => {
     await logout();
     navigate({ to: "/login", replace: true });
+  };
+
+  const submitSearch = (event: FormEvent) => {
+    event.preventDefault();
+    navigate({ to: "/problems" });
+    setQuery("");
+  };
+
+  const markRead = async (notification: ApiNotification) => {
+    if (notification.unread) {
+      try {
+        const data = await apiRequest<{ notification: ApiNotification }>(`/notifications/${notification._id}/read`, { method: "PATCH" });
+        setNotifications((current) => current.map((item) => item._id === notification._id ? data.notification : item));
+        setUnread((current) => Math.max(0, current - 1));
+      } catch (error) {
+        toast.error(error instanceof Error ? error.message : "Unable to mark notification read");
+      }
+    }
+    if (notification.link) window.location.assign(notification.link);
+  };
+
+  const markAllRead = async () => {
+    try {
+      await apiRequest<{ modifiedCount: number }>("/notifications/read-all", { method: "PATCH" });
+      setNotifications((current) => current.map((item) => ({ ...item, unread: false })));
+      setUnread(0);
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Unable to mark notifications read");
+    }
   };
 
   return (
@@ -53,26 +102,27 @@ export function Navbar({ onToggleSidebar }: { onToggleSidebar?: () => void }) {
         </Link>
 
         <nav className="ml-6 hidden items-center gap-1 lg:flex">
-          {nav.map((n) => {
-            const active = path.startsWith(n.to);
+          {nav.map((item) => {
+            const active = path.startsWith(item.to);
             return (
               <Link
-                key={n.to} to={n.to}
+                key={item.to}
+                to={item.to}
                 className={`px-3 py-1.5 text-sm rounded-md transition-colors ${
                   active ? "text-foreground bg-accent" : "text-muted-foreground hover:text-foreground hover:bg-accent/50"
                 }`}
               >
-                {n.label}
+                {item.label}
               </Link>
             );
           })}
         </nav>
 
         <div className="ml-auto flex items-center gap-2">
-          <div className="relative hidden md:block">
+          <form className="relative hidden md:block" onSubmit={submitSearch}>
             <Search className="absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" />
-            <Input placeholder="Search problems…" className="h-9 w-56 pl-8 bg-secondary/60 border-border/60" />
-          </div>
+            <Input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search problems..." className="h-9 w-56 pl-8 bg-secondary/60 border-border/60" />
+          </form>
 
           <Popover>
             <PopoverTrigger asChild>
@@ -84,18 +134,22 @@ export function Navbar({ onToggleSidebar }: { onToggleSidebar?: () => void }) {
               </Button>
             </PopoverTrigger>
             <PopoverContent align="end" className="w-80 p-0">
-              <div className="border-b border-border p-3 text-sm font-medium">Notifications</div>
+              <div className="flex items-center justify-between border-b border-border p-3 text-sm font-medium">
+                <span>Notifications</span>
+                {unread > 0 && <Button variant="ghost" size="sm" className="h-7 text-xs" onClick={markAllRead}>Read all</Button>}
+              </div>
               <div className="max-h-80 overflow-y-auto">
-                {notifications.map((n) => (
-                  <div key={n.id} className="flex items-start gap-3 border-b border-border/60 p-3 last:border-0 hover:bg-accent/40">
-                    <div className={`mt-1.5 h-2 w-2 shrink-0 rounded-full ${n.unread ? "bg-primary" : "bg-muted"}`} />
+                {notifications.map((notification) => (
+                  <button key={notification._id} type="button" onClick={() => markRead(notification)} className="flex w-full items-start gap-3 border-b border-border/60 p-3 text-left last:border-0 hover:bg-accent/40">
+                    <div className={`mt-1.5 h-2 w-2 shrink-0 rounded-full ${notification.unread ? "bg-primary" : "bg-muted"}`} />
                     <div className="min-w-0 flex-1">
-                      <div className="text-sm font-medium">{n.title}</div>
-                      <div className="text-xs text-muted-foreground">{n.body}</div>
+                      <div className="text-sm font-medium">{notification.title}</div>
+                      <div className="text-xs text-muted-foreground">{notification.body}</div>
                     </div>
-                    <span className="text-xs text-muted-foreground">{n.time}</span>
-                  </div>
+                    <span className="text-xs text-muted-foreground">{formatDistanceToNow(new Date(notification.createdAt))}</span>
+                  </button>
                 ))}
+                {notifications.length === 0 && <div className="p-4 text-sm text-muted-foreground">No notifications.</div>}
               </div>
             </PopoverContent>
           </Popover>

@@ -19,7 +19,16 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { apiRequest, type ApiDifficulty, type ApiProblem, type ApiProblemStatus } from "@/lib/api";
+import {
+  apiRequest,
+  type ApiDifficulty,
+  type ApiJudgeJob,
+  type ApiJudgeWorker,
+  type ApiLanguage,
+  type ApiProblem,
+  type ApiProblemStatus,
+  type ApiUser,
+} from "@/lib/api";
 import { useAuth } from "@/lib/auth";
 import { difficultyClass } from "@/lib/mock-data";
 
@@ -27,14 +36,6 @@ export const Route = createFileRoute("/admin")({
   head: () => ({ meta: [{ title: "Admin - CodeArena" }] }),
   component: Admin,
 });
-
-const queue = Array.from({ length: 12 }, (_, i) => ({ hour: `${i * 2}:00`, jobs: Math.floor(Math.random() * 400) + 80 }));
-const workers = Array.from({ length: 8 }, (_, i) => ({
-  id: `worker-${i + 1}`,
-  region: ["us-east", "eu-west", "ap-south"][i % 3],
-  load: Math.floor(Math.random() * 100),
-  status: Math.random() > 0.1 ? "online" : "degraded",
-}));
 
 type ProblemForm = {
   problemId: string;
@@ -135,6 +136,10 @@ function Admin() {
   const { user } = useAuth();
   const [problems, setProblems] = useState<ApiProblem[]>([]);
   const [loadingProblems, setLoadingProblems] = useState(true);
+  const [users, setUsers] = useState<ApiUser[]>([]);
+  const [jobs, setJobs] = useState<ApiJudgeJob[]>([]);
+  const [workers, setWorkers] = useState<ApiJudgeWorker[]>([]);
+  const [languages, setLanguages] = useState<ApiLanguage[]>([]);
   const [dialogOpen, setDialogOpen] = useState(false);
   const [saving, setSaving] = useState(false);
   const [form, setForm] = useState<ProblemForm>(emptyForm);
@@ -142,17 +147,41 @@ function Admin() {
   const nextProblemId = useMemo(() => (
     problems.length ? Math.max(...problems.map((problem) => problem.problemId)) + 1 : 1
   ), [problems]);
+  const queue = useMemo(() => {
+    const counts = new Map<string, number>();
+    jobs.forEach((job) => {
+      const hour = new Date(job.queuedAt).getHours();
+      const label = `${hour}:00`;
+      counts.set(label, (counts.get(label) ?? 0) + 1);
+    });
+    return Array.from({ length: 12 }, (_, index) => {
+      const hour = `${index * 2}:00`;
+      return { hour, jobs: counts.get(hour) ?? 0 };
+    });
+  }, [jobs]);
 
   useEffect(() => {
     if (user?.role !== "admin") return;
     let cancelled = false;
     setLoadingProblems(true);
-    apiRequest<{ problems: ApiProblem[] }>("/problems?limit=100")
-      .then((data) => {
-        if (!cancelled) setProblems(data.problems);
+    Promise.all([
+      apiRequest<{ problems: ApiProblem[] }>("/problems?limit=100"),
+      apiRequest<{ users: ApiUser[] }>("/users?limit=20"),
+      apiRequest<{ jobs: ApiJudgeJob[] }>("/judge/jobs?limit=30"),
+      apiRequest<{ workers: ApiJudgeWorker[] }>("/judge/workers"),
+      apiRequest<{ languages: ApiLanguage[] }>("/languages?all=true"),
+    ])
+      .then(([problemData, userData, jobData, workerData, languageData]) => {
+        if (!cancelled) {
+          setProblems(problemData.problems);
+          setUsers(userData.users);
+          setJobs(jobData.jobs);
+          setWorkers(workerData.workers);
+          setLanguages(languageData.languages);
+        }
       })
       .catch((error) => {
-        if (!cancelled) toast.error(error instanceof Error ? error.message : "Unable to load problems");
+        if (!cancelled) toast.error(error instanceof Error ? error.message : "Unable to load admin data");
       })
       .finally(() => {
         if (!cancelled) setLoadingProblems(false);
@@ -211,10 +240,10 @@ function Admin() {
           <>
             <div className="grid gap-4 md:grid-cols-4">
               {[
-                { l: "Total users", v: "243,184", i: Users, c: "text-info" },
+                { l: "Total users", v: loadingProblems ? "..." : String(users.length), i: Users, c: "text-info" },
                 { l: "Problems", v: loadingProblems ? "..." : String(problems.length), i: FileCode2, c: "text-primary" },
-                { l: "Jobs in queue", v: "84", i: Activity, c: "text-warning" },
-                { l: "Workers online", v: "7 / 8", i: Server, c: "text-success" },
+                { l: "Jobs in queue", v: String(jobs.filter((job) => job.status === "queued").length), i: Activity, c: "text-warning" },
+                { l: "Workers online", v: `${workers.filter((worker) => worker.status === "online").length} / ${workers.length}`, i: Server, c: "text-success" },
               ].map((s) => (
                 <Card key={s.l} className="border-border/60 p-5">
                   <div className="flex items-center justify-between"><span className="text-xs uppercase text-muted-foreground">{s.l}</span><s.i className="h-4 w-4 text-muted-foreground" /></div>
@@ -241,11 +270,11 @@ function Admin() {
                 <h3 className="mb-4 font-semibold">Worker nodes</h3>
                 <div className="space-y-2 text-sm">
                   {workers.map((w) => (
-                    <div key={w.id} className="rounded-lg border border-border/60 p-3">
+                    <div key={w._id} className="rounded-lg border border-border/60 p-3">
                       <div className="flex items-center justify-between">
                         <div className="flex items-center gap-2">
                           <Cpu className="h-4 w-4 text-muted-foreground" />
-                          <span className="font-mono text-xs">{w.id}</span>
+                          <span className="font-mono text-xs">{w.workerId}</span>
                         </div>
                         <Badge variant="outline" className={w.status === "online" ? "border-success/40 text-success" : "border-warning/40 text-warning"}>
                           <span className={`mr-1.5 h-1.5 w-1.5 rounded-full ${w.status === "online" ? "bg-success animate-pulse-glow" : "bg-warning"}`} />
@@ -260,6 +289,7 @@ function Admin() {
                       </div>
                     </div>
                   ))}
+                  {!loadingProblems && workers.length === 0 && <p className="text-sm text-muted-foreground">No workers registered.</p>}
                 </div>
               </Card>
             </div>
@@ -363,6 +393,69 @@ function Admin() {
                 </form>
               </DialogContent>
             </Dialog>
+
+            <div className="grid gap-4 lg:grid-cols-2">
+              <Card className="border-border/60">
+                <div className="p-5"><h3 className="font-semibold">Recent judge jobs</h3></div>
+                <table className="w-full text-sm">
+                  <thead className="bg-secondary/40 text-left text-xs uppercase tracking-wide text-muted-foreground">
+                    <tr><th className="px-4 py-3">Status</th><th className="px-4 py-3">Submission</th><th className="px-4 py-3">Worker</th><th className="px-4 py-3">Attempts</th></tr>
+                  </thead>
+                  <tbody>
+                    {jobs.map((job) => (
+                      <tr key={job._id} className="border-t border-border/60">
+                        <td className="px-4 py-3">{job.status}</td>
+                        <td className="px-4 py-3 text-xs text-muted-foreground">{job.submission?.submissionId ?? "-"}</td>
+                        <td className="px-4 py-3 text-xs text-muted-foreground">{job.worker?.workerId ?? "-"}</td>
+                        <td className="px-4 py-3 font-mono text-xs">{job.attempts}</td>
+                      </tr>
+                    ))}
+                    {!loadingProblems && jobs.length === 0 && <tr><td colSpan={4} className="px-4 py-8 text-center text-muted-foreground">No judge jobs.</td></tr>}
+                  </tbody>
+                </table>
+              </Card>
+
+              <Card className="border-border/60">
+                <div className="p-5"><h3 className="font-semibold">Languages</h3></div>
+                <table className="w-full text-sm">
+                  <thead className="bg-secondary/40 text-left text-xs uppercase tracking-wide text-muted-foreground">
+                    <tr><th className="px-4 py-3">ID</th><th className="px-4 py-3">Label</th><th className="px-4 py-3">Version</th><th className="px-4 py-3">Enabled</th></tr>
+                  </thead>
+                  <tbody>
+                    {languages.map((language) => (
+                      <tr key={language.languageId} className="border-t border-border/60">
+                        <td className="px-4 py-3 font-mono text-xs">{language.languageId}</td>
+                        <td className="px-4 py-3">{language.label}</td>
+                        <td className="px-4 py-3 text-muted-foreground">{language.version ?? "-"}</td>
+                        <td className="px-4 py-3 text-muted-foreground">{language.enabled === false ? "No" : "Yes"}</td>
+                      </tr>
+                    ))}
+                    {!loadingProblems && languages.length === 0 && <tr><td colSpan={4} className="px-4 py-8 text-center text-muted-foreground">No languages configured.</td></tr>}
+                  </tbody>
+                </table>
+              </Card>
+            </div>
+
+            <Card className="border-border/60">
+              <div className="p-5"><h3 className="font-semibold">Users</h3></div>
+              <table className="w-full text-sm">
+                <thead className="bg-secondary/40 text-left text-xs uppercase tracking-wide text-muted-foreground">
+                  <tr><th className="px-4 py-3">Username</th><th className="px-4 py-3">Email</th><th className="px-4 py-3">Role</th><th className="px-4 py-3">Rating</th><th className="px-4 py-3">Solved</th></tr>
+                </thead>
+                <tbody>
+                  {users.map((row) => (
+                    <tr key={row._id} className="border-t border-border/60">
+                      <td className="px-4 py-3 font-medium">{row.username}</td>
+                      <td className="px-4 py-3 text-muted-foreground">{row.email}</td>
+                      <td className="px-4 py-3 text-muted-foreground">{row.role}</td>
+                      <td className="px-4 py-3 font-mono text-xs">{row.rating ?? 0}</td>
+                      <td className="px-4 py-3 font-mono text-xs">{row.solved?.total ?? 0}</td>
+                    </tr>
+                  ))}
+                  {!loadingProblems && users.length === 0 && <tr><td colSpan={5} className="px-4 py-8 text-center text-muted-foreground">No users found.</td></tr>}
+                </tbody>
+              </table>
+            </Card>
           </>
         )}
       </div>

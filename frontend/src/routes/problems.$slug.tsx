@@ -16,6 +16,7 @@ import { apiRequest, type ApiLanguage, type ApiProblem, type ApiProblemProgress,
 import { difficultyClass } from "@/lib/mock-data";
 import { toast } from "sonner";
 import { useRequireAuth } from "@/lib/auth";
+import { useTheme } from "@/lib/theme";
 
 export const Route = createFileRoute("/problems/$slug")({
   head: () => ({ meta: [{ title: "Problem - CodeArena" }] }),
@@ -59,6 +60,7 @@ const resultText = (submission: ApiSubmission) => {
 
 function ProblemDetail() {
   const { isLoading, user } = useRequireAuth();
+  const { theme } = useTheme();
   const { slug } = Route.useParams();
   const [problem, setProblem] = useState<ApiProblem | null>(null);
   const [progress, setProgress] = useState<ApiProblemProgress | null>(null);
@@ -237,12 +239,12 @@ function ProblemDetail() {
                 <Badge variant="secondary" className="ml-1 h-5 px-1.5 text-[10px]">{submissions.length}</Badge>
               </Button>
             </SheetTrigger>
-            <SheetContent className="w-[420px] sm:max-w-md">
-              <SheetHeader>
+            <SheetContent className="flex h-full w-105 flex-col sm:max-w-md">
+              <SheetHeader className="shrink-0">
                 <SheetTitle>Submission History</SheetTitle>
                 <SheetDescription>Recent attempts for {problem.title}</SheetDescription>
               </SheetHeader>
-              <div className="mt-4 space-y-2 overflow-y-auto pr-1">
+              <div className="scrollbar-none mt-4 min-h-0 flex-1 space-y-2 overflow-y-auto pr-1">
                 {submissions.map((submission) => (
                   <div key={submission.submissionId} className="rounded-lg border border-border/60 bg-card/40 p-3">
                     <div className="flex items-center justify-between">
@@ -370,7 +372,7 @@ function ProblemDetail() {
               </div>
               <div className="flex-1 min-h-0">
                 <Editor
-                  theme="vs-dark"
+                  theme={theme === "dark" ? "vs-dark" : "vs"}
                   language={languages.find((language) => language.languageId === lang)?.monaco || "plaintext"}
                   value={code}
                   onChange={(value) => setCode(value ?? "")}
