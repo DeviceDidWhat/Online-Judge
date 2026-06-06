@@ -8,10 +8,10 @@ const Language = require('../models/language');
 const DEFAULT_DOCKER_IMAGES = {
   cpp: 'gcc:13',
   c: 'gcc:13',
-  python: 'python:3.11-alpine',
-  py: 'python:3.11-alpine',
-  javascript: 'node:20-alpine',
-  js: 'node:20-alpine',
+  python: 'python:3.10-alpine',
+  py: 'python:3.10-alpine',
+  javascript: 'node:18-alpine',
+  js: 'node:18-alpine',
   java: 'eclipse-temurin:17',
 };
 
@@ -174,18 +174,44 @@ const dockerArgs = ({ workDir, image, command, input, readonly, memoryLimitMb, t
   if (extraSecurityOpt) args.push('--security-opt', extraSecurityOpt);
   if (input) args.push('-i');
 
-  args.push(image, 'sh', '-lc', command);
+  args.push(image, 'sh', '-c', command);
   return { command: 'docker', args, timeoutMs: timeLimitMs + DOCKER_TIMEOUT_BUFFER_MS, input };
 };
 
 const runDocker = async (params) => {
   const execution = dockerArgs(params);
   try {
-    return await execWithStats(execution.command, execution.args, {
+    const runResult = await execWithStats(execution.command, execution.args, {
       input: execution.input,
       timeoutMs: execution.timeoutMs,
       containerName: params.name,
     });
+
+    let innerRuntimeMs = null;
+    try {
+      const inspectResult = await execFile(
+        'docker',
+        ['inspect', params.name, '--format', '{{.State.StartedAt}} {{.State.FinishedAt}}'],
+        { timeoutMs: 2000 }
+      );
+      if (inspectResult.code === 0) {
+        const [startedAtStr, finishedAtStr] = inspectResult.stdout.trim().split(' ');
+        if (startedAtStr && finishedAtStr) {
+          const start = new Date(startedAtStr).getTime();
+          const end = new Date(finishedAtStr).getTime();
+          if (!isNaN(start) && !isNaN(end) && start > 0 && end >= start) {
+            innerRuntimeMs = end - start;
+          }
+        }
+      }
+    } catch (err) {
+      // Ignore inspect failures, fallback to process-level runtimeMs
+    }
+
+    return {
+      ...runResult,
+      innerRuntimeMs,
+    };
   } finally {
     await execFile('docker', ['rm', '-f', params.name], { timeoutMs: 2000 });
   }
@@ -263,7 +289,7 @@ const runSubmission = async ({ submission, problem }) => {
         name: runName,
       });
 
-      const runtime = Math.ceil(runResult.runtimeMs);
+      const runtime = Math.ceil(runResult.innerRuntimeMs ?? runResult.runtimeMs);
       const memory = Number(runResult.memoryMb.toFixed(2));
       maxRuntime = Math.max(maxRuntime, runtime);
       maxMemory = Math.max(maxMemory, memory);
@@ -271,7 +297,7 @@ const runSubmission = async ({ submission, problem }) => {
       const actualOutput = normalizeOutput(runResult.stdout);
       const expectedOutput = normalizeOutput(testcase.expectedOutput);
       let verdict = 'Accepted';
-      if (runResult.timedOut) verdict = 'TLE';
+      if (runResult.timedOut || runtime > timeLimitMs) verdict = 'TLE';
       else if (runResult.code === 137 || /out of memory|killed/i.test(runResult.stderr)) verdict = 'MLE';
       else if (runResult.code !== 0) verdict = 'Runtime Error';
       else if (actualOutput !== expectedOutput) verdict = 'Wrong Answer';
