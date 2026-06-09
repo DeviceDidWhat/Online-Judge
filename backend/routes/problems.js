@@ -12,5 +12,6 @@ router.delete('/:slug', verifyAccessToken, requireRole('admin'), controller.dele
 router.get('/:slug/progress', verifyAccessToken, controller.getProblemProgress);
 router.post('/:slug/bookmark', verifyAccessToken, controller.toggleBookmark);
 router.put('/:slug/saved-code', verifyAccessToken, controller.saveCode);
+router.post('/:slug/run', verifyAccessToken, controller.runCustom);
 
 module.exports = router;

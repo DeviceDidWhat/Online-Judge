@@ -152,7 +152,35 @@ function ProblemDetail() {
 
   const onRun = () => {
     setBottomTab("output");
-    setOutput("Custom run is not available from the current backend API. Use Submit to judge against the official testcases.");
+    setOutput("Running...");
+    (async () => {
+      try {
+        const data = await apiRequest<{ result: any }>(`/problems/${slug}/run`, {
+          method: "POST",
+          body: JSON.stringify({ language: lang, sourceCode: code, input: customInput }),
+        });
+        const res = data.result;
+        if (!res) {
+          setOutput("No result returned");
+          return;
+        }
+
+        if (res.compileError) {
+          setOutput(`Compilation failed:\n${res.stderr || res.stdout}`);
+          return;
+        }
+
+        let text = '';
+        if (res.timedOut) text += 'Timed out\n\n';
+        if (typeof res.exitCode !== 'undefined' && res.exitCode !== 0) text += `Exit code: ${res.exitCode}\n\n`;
+        if (res.stdout) text += `Output:\n${res.stdout}\n`;
+        if (res.stderr) text += `\nStderr:\n${res.stderr}\n`;
+        text += `\nRuntime: ${res.runtimeMs ?? 0} ms\nMemory: ${res.memoryMb ?? 0} MB`;
+        setOutput(text.trim());
+      } catch (err) {
+        setOutput(err instanceof Error ? err.message : 'Run failed');
+      }
+    })();
   };
 
   const onSubmit = async () => {

@@ -146,6 +146,25 @@ const saveCode = asyncHandler(async (req, res) => {
   res.json({ progress });
 });
 
+const runCustom = asyncHandler(async (req, res) => {
+  const { language, sourceCode, input = '' } = req.body;
+  if (!language || !sourceCode) return res.status(400).json({ message: 'Language and sourceCode are required' });
+
+  const problem = await Problem.findOne({ slug: req.params.slug }).select('timeLimitMs memoryLimitMb');
+  if (!problem) return res.status(404).json({ message: 'Problem not found' });
+
+  const judgeRunner = require('../services/judgeRunner');
+  const result = await judgeRunner.runCode({
+    language,
+    sourceCode,
+    input,
+    timeLimitMs: problem.timeLimitMs || 1000,
+    memoryLimitMb: problem.memoryLimitMb || 256,
+  });
+
+  res.json({ result });
+});
+
 module.exports = {
   listProblems,
   getProblem,
@@ -155,4 +174,5 @@ module.exports = {
   getProblemProgress,
   toggleBookmark,
   saveCode,
+  runCustom,
 };

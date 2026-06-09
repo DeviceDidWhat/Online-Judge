@@ -347,4 +347,61 @@ const runSubmission = async ({ submission, problem }) => {
   }
 };
 
-module.exports = { runSubmission, normalizeOutput };
+const runCode = async ({ language, sourceCode, input = '', timeLimitMs = 1000, memoryLimitMb = 256 }) => {
+  const spec = await loadLanguageSpec(language);
+  if (!spec.image) throw new Error(`No Docker image configured for language: ${language}`);
+  if (!spec.file || !spec.run) throw new Error(`Incomplete language runner for: ${language}`);
+
+  const workDir = await fs.mkdtemp(path.join(os.tmpdir(), 'judge-'));
+  try {
+    await fs.writeFile(path.join(workDir, spec.file), sourceCode, 'utf8');
+
+    if (spec.compile) {
+      const compileName = `judge_compile_${crypto.randomBytes(8).toString('hex')}`;
+      const compileResult = await runDocker({
+        workDir,
+        image: spec.image,
+        command: spec.compile,
+        readonly: false,
+        memoryLimitMb,
+        timeLimitMs: Math.max(timeLimitMs, 10000),
+        name: compileName,
+      });
+      if (compileResult.timedOut || compileResult.code !== 0) {
+        return {
+          success: false,
+          compileError: true,
+          stdout: compileResult.stdout.slice(0, 12000),
+          stderr: compileResult.stderr.slice(0, 12000),
+          runtimeMs: compileResult.runtimeMs,
+        };
+      }
+    }
+
+    const runName = `judge_run_${crypto.randomBytes(8).toString('hex')}`;
+    const runResult = await runDocker({
+      workDir,
+      image: spec.image,
+      command: spec.run,
+      input,
+      readonly: true,
+      memoryLimitMb,
+      timeLimitMs,
+      name: runName,
+    });
+
+    return {
+      success: true,
+      timedOut: !!runResult.timedOut,
+      exitCode: runResult.code,
+      stdout: runResult.stdout.slice(0, 12000),
+      stderr: runResult.stderr.slice(0, 12000),
+      runtimeMs: Math.ceil(runResult.innerRuntimeMs ?? runResult.runtimeMs),
+      memoryMb: runResult.memoryMb ?? 0,
+    };
+  } finally {
+    await fs.rm(workDir, { recursive: true, force: true });
+  }
+};
+
+module.exports = { runSubmission, normalizeOutput, runCode };
