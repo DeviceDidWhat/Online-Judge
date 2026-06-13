@@ -21,7 +21,9 @@ import { Route as DashboardRouteImport } from './routes/dashboard'
 import { Route as ContestsRouteImport } from './routes/contests'
 import { Route as AdminRouteImport } from './routes/admin'
 import { Route as IndexRouteImport } from './routes/index'
+import { Route as ContestsIndexRouteImport } from './routes/contests.index'
 import { Route as ProblemsSlugRouteImport } from './routes/problems.$slug'
+import { Route as DiscussIdRouteImport } from './routes/discuss.$id'
 import { Route as ContestsIdRouteImport } from './routes/contests.$id'
 
 const SubmissionsRoute = SubmissionsRouteImport.update({
@@ -84,10 +86,20 @@ const IndexRoute = IndexRouteImport.update({
   path: '/',
   getParentRoute: () => rootRouteImport,
 } as any)
+const ContestsIndexRoute = ContestsIndexRouteImport.update({
+  id: '/',
+  path: '/',
+  getParentRoute: () => ContestsRoute,
+} as any)
 const ProblemsSlugRoute = ProblemsSlugRouteImport.update({
   id: '/$slug',
   path: '/$slug',
   getParentRoute: () => ProblemsRoute,
+} as any)
+const DiscussIdRoute = DiscussIdRouteImport.update({
+  id: '/$id',
+  path: '/$id',
+  getParentRoute: () => DiscussRoute,
 } as any)
 const ContestsIdRoute = ContestsIdRouteImport.update({
   id: '/$id',
@@ -100,7 +112,7 @@ export interface FileRoutesByFullPath {
   '/admin': typeof AdminRoute
   '/contests': typeof ContestsRouteWithChildren
   '/dashboard': typeof DashboardRoute
-  '/discuss': typeof DiscussRoute
+  '/discuss': typeof DiscussRouteWithChildren
   '/leaderboard': typeof LeaderboardRoute
   '/login': typeof LoginRoute
   '/problems': typeof ProblemsRouteWithChildren
@@ -109,14 +121,15 @@ export interface FileRoutesByFullPath {
   '/settings': typeof SettingsRoute
   '/submissions': typeof SubmissionsRoute
   '/contests/$id': typeof ContestsIdRoute
+  '/discuss/$id': typeof DiscussIdRoute
   '/problems/$slug': typeof ProblemsSlugRoute
+  '/contests/': typeof ContestsIndexRoute
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
   '/admin': typeof AdminRoute
-  '/contests': typeof ContestsRouteWithChildren
   '/dashboard': typeof DashboardRoute
-  '/discuss': typeof DiscussRoute
+  '/discuss': typeof DiscussRouteWithChildren
   '/leaderboard': typeof LeaderboardRoute
   '/login': typeof LoginRoute
   '/problems': typeof ProblemsRouteWithChildren
@@ -125,7 +138,9 @@ export interface FileRoutesByTo {
   '/settings': typeof SettingsRoute
   '/submissions': typeof SubmissionsRoute
   '/contests/$id': typeof ContestsIdRoute
+  '/discuss/$id': typeof DiscussIdRoute
   '/problems/$slug': typeof ProblemsSlugRoute
+  '/contests': typeof ContestsIndexRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
@@ -133,7 +148,7 @@ export interface FileRoutesById {
   '/admin': typeof AdminRoute
   '/contests': typeof ContestsRouteWithChildren
   '/dashboard': typeof DashboardRoute
-  '/discuss': typeof DiscussRoute
+  '/discuss': typeof DiscussRouteWithChildren
   '/leaderboard': typeof LeaderboardRoute
   '/login': typeof LoginRoute
   '/problems': typeof ProblemsRouteWithChildren
@@ -142,7 +157,9 @@ export interface FileRoutesById {
   '/settings': typeof SettingsRoute
   '/submissions': typeof SubmissionsRoute
   '/contests/$id': typeof ContestsIdRoute
+  '/discuss/$id': typeof DiscussIdRoute
   '/problems/$slug': typeof ProblemsSlugRoute
+  '/contests/': typeof ContestsIndexRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
@@ -160,12 +177,13 @@ export interface FileRouteTypes {
     | '/settings'
     | '/submissions'
     | '/contests/$id'
+    | '/discuss/$id'
     | '/problems/$slug'
+    | '/contests/'
   fileRoutesByTo: FileRoutesByTo
   to:
     | '/'
     | '/admin'
-    | '/contests'
     | '/dashboard'
     | '/discuss'
     | '/leaderboard'
@@ -176,7 +194,9 @@ export interface FileRouteTypes {
     | '/settings'
     | '/submissions'
     | '/contests/$id'
+    | '/discuss/$id'
     | '/problems/$slug'
+    | '/contests'
   id:
     | '__root__'
     | '/'
@@ -192,7 +212,9 @@ export interface FileRouteTypes {
     | '/settings'
     | '/submissions'
     | '/contests/$id'
+    | '/discuss/$id'
     | '/problems/$slug'
+    | '/contests/'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
@@ -200,7 +222,7 @@ export interface RootRouteChildren {
   AdminRoute: typeof AdminRoute
   ContestsRoute: typeof ContestsRouteWithChildren
   DashboardRoute: typeof DashboardRoute
-  DiscussRoute: typeof DiscussRoute
+  DiscussRoute: typeof DiscussRouteWithChildren
   LeaderboardRoute: typeof LeaderboardRoute
   LoginRoute: typeof LoginRoute
   ProblemsRoute: typeof ProblemsRouteWithChildren
@@ -296,12 +318,26 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof IndexRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/contests/': {
+      id: '/contests/'
+      path: '/'
+      fullPath: '/contests/'
+      preLoaderRoute: typeof ContestsIndexRouteImport
+      parentRoute: typeof ContestsRoute
+    }
     '/problems/$slug': {
       id: '/problems/$slug'
       path: '/$slug'
       fullPath: '/problems/$slug'
       preLoaderRoute: typeof ProblemsSlugRouteImport
       parentRoute: typeof ProblemsRoute
+    }
+    '/discuss/$id': {
+      id: '/discuss/$id'
+      path: '/$id'
+      fullPath: '/discuss/$id'
+      preLoaderRoute: typeof DiscussIdRouteImport
+      parentRoute: typeof DiscussRoute
     }
     '/contests/$id': {
       id: '/contests/$id'
@@ -315,15 +351,28 @@ declare module '@tanstack/react-router' {
 
 interface ContestsRouteChildren {
   ContestsIdRoute: typeof ContestsIdRoute
+  ContestsIndexRoute: typeof ContestsIndexRoute
 }
 
 const ContestsRouteChildren: ContestsRouteChildren = {
   ContestsIdRoute: ContestsIdRoute,
+  ContestsIndexRoute: ContestsIndexRoute,
 }
 
 const ContestsRouteWithChildren = ContestsRoute._addFileChildren(
   ContestsRouteChildren,
 )
+
+interface DiscussRouteChildren {
+  DiscussIdRoute: typeof DiscussIdRoute
+}
+
+const DiscussRouteChildren: DiscussRouteChildren = {
+  DiscussIdRoute: DiscussIdRoute,
+}
+
+const DiscussRouteWithChildren =
+  DiscussRoute._addFileChildren(DiscussRouteChildren)
 
 interface ProblemsRouteChildren {
   ProblemsSlugRoute: typeof ProblemsSlugRoute
@@ -342,7 +391,7 @@ const rootRouteChildren: RootRouteChildren = {
   AdminRoute: AdminRoute,
   ContestsRoute: ContestsRouteWithChildren,
   DashboardRoute: DashboardRoute,
-  DiscussRoute: DiscussRoute,
+  DiscussRoute: DiscussRouteWithChildren,
   LeaderboardRoute: LeaderboardRoute,
   LoginRoute: LoginRoute,
   ProblemsRoute: ProblemsRouteWithChildren,

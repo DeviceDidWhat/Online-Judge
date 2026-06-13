@@ -1,7 +1,7 @@
 import { createFileRoute, Link } from "@tanstack/react-router";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState, type FormEvent } from "react";
 import Editor from "@monaco-editor/react";
-import { ArrowLeft, Bookmark, History, Lightbulb, Play, RotateCcw, Send, Terminal } from "lucide-react";
+import { ArrowLeft, Bookmark, History, Lightbulb, Play, RotateCcw, Send, Terminal, MessageCircle, Plus, ThumbsUp, HelpCircle } from "lucide-react";
 import { Navbar } from "@/components/navbar";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -12,11 +12,16 @@ import { ResizableHandle, ResizablePanel, ResizablePanelGroup } from "@/componen
 import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle, SheetTrigger } from "@/components/ui/sheet";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { VerdictBadge } from "@/components/verdict-badge";
-import { apiRequest, type ApiLanguage, type ApiProblem, type ApiProblemProgress, type ApiSubmission, type ApiVerdict } from "@/lib/api";
+import { apiRequest, type ApiLanguage, type ApiProblem, type ApiProblemProgress, type ApiSubmission, type ApiVerdict, type ApiDiscussion } from "@/lib/api";
 import { difficultyClass } from "@/lib/mock-data";
 import { toast } from "sonner";
 import { useRequireAuth } from "@/lib/auth";
 import { useTheme } from "@/lib/theme";
+import { Input } from "@/components/ui/input";
+import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
+import { formatDistanceToNow } from "date-fns";
+
+const availableTags = ["Tutorial", "Question", "Editorial", "Help", "Discussion"];
 
 export const Route = createFileRoute("/problems/$slug")({
   head: () => ({ meta: [{ title: "Problem - CodeArena" }] }),
@@ -78,6 +83,62 @@ function ProblemDetail() {
   const [bottomTab, setBottomTab] = useState("testcase");
   const [resultSubmission, setResultSubmission] = useState<ApiSubmission | null>(null);
   const [submissions, setSubmissions] = useState<ApiSubmission[]>([]);
+
+  // Discussion Integration States
+  const [problemDiscussions, setProblemDiscussions] = useState<ApiDiscussion[]>([]);
+  const [loadingDiscussions, setLoadingDiscussions] = useState(false);
+  const [discussDialogOpen, setDiscussDialogOpen] = useState(false);
+  const [newDiscussTitle, setNewDiscussTitle] = useState("");
+  const [newDiscussBody, setNewDiscussBody] = useState("");
+  const [newDiscussTag, setNewDiscussTag] = useState("Question");
+  const [creatingDiscuss, setCreatingDiscuss] = useState(false);
+
+  // Fetch discussions when problem is loaded
+  useEffect(() => {
+    if (!problem?._id) return;
+    let cancelled = false;
+    setLoadingDiscussions(true);
+    apiRequest<{ discussions: ApiDiscussion[] }>(`/discussions?problem=${problem._id}&limit=50`)
+      .then((data) => {
+        if (!cancelled) setProblemDiscussions(data.discussions);
+      })
+      .catch((err) => {
+        console.error("Failed to load problem discussions:", err);
+      })
+      .finally(() => {
+        if (!cancelled) setLoadingDiscussions(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [problem?._id]);
+
+  const handleCreateProblemDiscussion = async (e: FormEvent) => {
+    e.preventDefault();
+    if (!newDiscussTitle.trim() || !newDiscussBody.trim() || !problem) return;
+    setCreatingDiscuss(true);
+    try {
+      const data = await apiRequest<{ discussion: ApiDiscussion }>("/discussions", {
+        method: "POST",
+        body: JSON.stringify({
+          title: newDiscussTitle.trim(),
+          body: newDiscussBody.trim(),
+          tags: [newDiscussTag],
+          problem: problem._id,
+        }),
+      });
+      setProblemDiscussions((curr) => [data.discussion, ...curr]);
+      setDiscussDialogOpen(false);
+      setNewDiscussTitle("");
+      setNewDiscussBody("");
+      setNewDiscussTag("Question");
+      toast.success("Discussion posted successfully!");
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Unable to post discussion");
+    } finally {
+      setCreatingDiscuss(false);
+    }
+  };
 
   useEffect(() => {
     if (!user) return;
@@ -311,6 +372,7 @@ function ProblemDetail() {
                 <TabsTrigger value="problem">Description</TabsTrigger>
                 <TabsTrigger value="hints">Hints</TabsTrigger>
                 <TabsTrigger value="submissions">Submissions</TabsTrigger>
+                <TabsTrigger value="discussions">Discussions</TabsTrigger>
               </TabsList>
 
               <TabsContent value="problem" className="space-y-6 pt-4 text-sm leading-relaxed">
@@ -366,6 +428,56 @@ function ProblemDetail() {
                   </div>
                 ))}
                 {submissions.length === 0 && <p className="text-sm text-muted-foreground">No submissions yet.</p>}
+              </TabsContent>
+
+              <TabsContent value="discussions" className="pt-4 space-y-4">
+                <div className="flex items-center justify-between">
+                  <h3 className="font-semibold text-sm">Community Discussions</h3>
+                  <Button size="sm" variant="outline" className="h-8 gap-1.5 text-xs" onClick={() => setDiscussDialogOpen(true)}>
+                    <Plus className="h-3.5 w-3.5" /> Ask a Question
+                  </Button>
+                </div>
+
+                <div className="space-y-3">
+                  {loadingDiscussions ? (
+                    <div className="text-center py-8 text-xs text-muted-foreground">Loading discussions...</div>
+                  ) : problemDiscussions.length === 0 ? (
+                    <div className="text-center py-12 border border-dashed border-border/60 rounded-lg space-y-2">
+                      <HelpCircle className="h-8 w-8 text-muted-foreground/40 mx-auto" />
+                      <p className="text-sm font-semibold text-muted-foreground">No discussions yet</p>
+                      <p className="text-xs text-muted-foreground">Have a question or solution to share? Start the discussion!</p>
+                    </div>
+                  ) : (
+                    problemDiscussions.map((d) => {
+                      const authorName = d.author?.username ?? d.authorUsername ?? "anonymous";
+                      return (
+                        <div key={d._id} className="p-3 border border-border/50 rounded-lg hover:bg-accent/10 transition flex items-start gap-3">
+                          <Avatar className="h-8 w-8 border border-border/60">
+                            <AvatarImage src={d.author?.avatar} />
+                            <AvatarFallback>{authorName[0]?.toUpperCase()}</AvatarFallback>
+                          </Avatar>
+                          <div className="min-w-0 flex-1">
+                            <Link to="/discuss/$id" params={{ id: d._id }} className="text-sm font-semibold hover:text-primary transition-colors block truncate">
+                              {d.title}
+                            </Link>
+                            <div className="text-[10px] text-muted-foreground flex items-center gap-1.5 mt-1">
+                              <span>by {authorName}</span>
+                              <span>•</span>
+                              <span>{formatDistanceToNow(new Date(d.createdAt))} ago</span>
+                            </div>
+                            <div className="flex gap-1 mt-2">
+                              {d.tags.map(t => <Badge key={t} variant="secondary" className="text-[9px] font-normal px-1.5 py-0">{t}</Badge>)}
+                            </div>
+                          </div>
+                          <div className="flex items-center gap-3 text-xs text-muted-foreground self-center">
+                            <span className="flex items-center gap-1"><ThumbsUp className="h-3.5 w-3.5" /> {d.upvotes - d.downvotes}</span>
+                            <span className="flex items-center gap-1"><MessageCircle className="h-3.5 w-3.5" /> {d.comments?.length ?? 0}</span>
+                          </div>
+                        </div>
+                      );
+                    })
+                  )}
+                </div>
               </TabsContent>
             </Tabs>
           </div>
@@ -463,6 +575,49 @@ function ProblemDetail() {
           <pre className="max-h-80 overflow-auto rounded-md bg-secondary/60 p-3 font-mono text-xs whitespace-pre-wrap">
             {resultSubmission ? resultText(resultSubmission) : ""}
           </pre>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={discussDialogOpen} onOpenChange={setDiscussDialogOpen}>
+        <DialogContent className="sm:max-w-xl bg-card border-border/60">
+          <DialogHeader>
+            <DialogTitle className="text-xl font-bold">New discussion for {problem.title}</DialogTitle>
+            <DialogDescription>
+              Ask a question or post a solution/editorial for this problem.
+            </DialogDescription>
+          </DialogHeader>
+          <form className="space-y-4 pt-2" onSubmit={handleCreateProblemDiscussion}>
+            <div className="space-y-1.5">
+              <label className="text-xs font-semibold text-muted-foreground uppercase">Title</label>
+              <Input value={newDiscussTitle} onChange={(e) => setNewDiscussTitle(e.target.value)} placeholder="Topic title" required className="bg-card" />
+            </div>
+            
+            <div className="space-y-1.5">
+              <label className="text-xs font-semibold text-muted-foreground uppercase">Content</label>
+              <Textarea value={newDiscussBody} onChange={(e) => setNewDiscussBody(e.target.value)} placeholder="Explain your question or approach..." className="min-h-36 resize-none font-sans bg-card" required />
+            </div>
+
+            <div className="space-y-1.5">
+              <label className="text-xs font-semibold text-muted-foreground uppercase">Category Tag</label>
+              <Select value={newDiscussTag} onValueChange={setNewDiscussTag}>
+                <SelectTrigger className="w-full bg-card">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  {availableTags.map((t) => (
+                    <SelectItem key={t} value={t}>{t}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+
+            <div className="flex justify-end gap-3 pt-2">
+              <Button type="button" variant="outline" onClick={() => setDiscussDialogOpen(false)} disabled={creatingDiscuss}>Cancel</Button>
+              <Button type="submit" className="gradient-primary text-primary-foreground font-semibold" disabled={creatingDiscuss}>
+                {creatingDiscuss ? "Posting..." : "Create Post"}
+              </Button>
+            </div>
+          </form>
         </DialogContent>
       </Dialog>
     </div>

@@ -6,6 +6,10 @@ const solvedProblemSchema = new Schema({
   submission: { type: Schema.Types.ObjectId, ref: 'Submission' },
   solvedAt: { type: Date, default: Date.now },
   points: { type: Number, default: 0, min: 0 },
+  // ICPC-style: number of wrong attempts before the AC
+  wrongAttempts: { type: Number, default: 0, min: 0 },
+  // Minutes from contest start to AC (used for penalty)
+  timePenaltyMinutes: { type: Number, default: 0, min: 0 },
 }, { _id: false });
 
 const contestRegistrationSchema = new Schema({
@@ -13,9 +17,12 @@ const contestRegistrationSchema = new Schema({
   user: { type: Schema.Types.ObjectId, ref: 'User', required: true },
   registeredAt: { type: Date, default: Date.now },
   score: { type: Number, default: 0, min: 0 },
+  // ICPC-style total penalty (sum of timePenaltyMinutes + 20*wrongAttempts per solved problem)
   penalty: { type: Number, default: 0, min: 0 },
   rank: { type: Number, min: 1 },
   solvedProblems: [solvedProblemSchema],
+  // Rating delta applied after finalization
+  ratingChange: { type: Number, default: 0 },
 }, { timestamps: true });
 
 contestRegistrationSchema.index({ contest: 1, user: 1 }, { unique: true });

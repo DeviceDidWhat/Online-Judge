@@ -5,6 +5,7 @@ const commentSchema = new Schema({
   author: { type: Schema.Types.ObjectId, ref: 'User', required: true },
   body: { type: String, required: true },
   upvotes: { type: Number, default: 0, min: 0 },
+  upvotedBy: [{ type: Schema.Types.ObjectId, ref: 'User' }],
   createdAt: { type: Date, default: Date.now },
   updatedAt: { type: Date },
 }, { _id: true });
@@ -19,6 +20,8 @@ const discussionSchema = new Schema({
   contest: { type: Schema.Types.ObjectId, ref: 'Contest' },
   upvotes: { type: Number, default: 0, min: 0 },
   downvotes: { type: Number, default: 0, min: 0 },
+  upvotedBy: [{ type: Schema.Types.ObjectId, ref: 'User' }],
+  downvotedBy: [{ type: Schema.Types.ObjectId, ref: 'User' }],
   comments: [commentSchema],
   isPinned: { type: Boolean, default: false },
   isLocked: { type: Boolean, default: false },

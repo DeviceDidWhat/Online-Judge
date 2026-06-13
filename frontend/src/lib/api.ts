@@ -185,17 +185,28 @@ export type ApiContest = {
   _id: string;
   contestId: number;
   name: string;
+  description?: string;
   startsAt: string;
   duration: number;
   status: ApiContestStatus;
   difficulty: string;
   registeredCount: number;
+  ratingProcessed?: boolean;
   problems: Array<{
     problem: Pick<ApiProblem, "_id" | "problemId" | "slug" | "title" | "difficulty">;
     label: string;
     points: number;
     order: number;
   }>;
+};
+
+export type ApiSolvedProblem = {
+  problem: string;
+  submission?: string;
+  solvedAt: string;
+  points: number;
+  wrongAttempts: number;
+  timePenaltyMinutes: number;
 };
 
 export type ApiContestRegistration = {
@@ -206,6 +217,8 @@ export type ApiContestRegistration = {
   score: number;
   penalty: number;
   rank?: number;
+  solvedProblems: ApiSolvedProblem[];
+  ratingChange?: number;
 };
 
 export type ApiDiscussion = {
@@ -219,11 +232,16 @@ export type ApiDiscussion = {
   contest?: Pick<ApiContest, "_id" | "contestId" | "name">;
   upvotes: number;
   downvotes: number;
+  upvotedBy?: string[];
+  downvotedBy?: string[];
+  userVote?: "up" | "down" | null;
   comments: Array<{
     _id: string;
     author?: Pick<ApiUser, "_id" | "username" | "avatar">;
     body: string;
     upvotes: number;
+    upvotedBy?: string[];
+    userVote?: "up" | null;
     createdAt: string;
     updatedAt?: string;
   }>;

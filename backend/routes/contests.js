@@ -4,12 +4,20 @@ const { optionalAccessToken, verifyAccessToken, requireRole } = require('../midd
 
 const router = express.Router();
 
+// Public / optional-auth
 router.get('/', controller.listContests);
-router.post('/', verifyAccessToken, requireRole('admin'), controller.createContest);
 router.get('/:id', optionalAccessToken, controller.getContest);
+router.get('/:id/leaderboard', controller.contestLeaderboard);
+
+// Authenticated users
+router.post('/:id/register', verifyAccessToken, controller.registerForContest);
+router.post('/:id/submit', verifyAccessToken, controller.submitToContest);
+router.get('/:id/my-submissions', verifyAccessToken, controller.getMyContestSubmissions);
+
+// Admin only
+router.post('/', verifyAccessToken, requireRole('admin'), controller.createContest);
 router.put('/:id', verifyAccessToken, requireRole('admin'), controller.updateContest);
 router.delete('/:id', verifyAccessToken, requireRole('admin'), controller.deleteContest);
-router.post('/:id/register', verifyAccessToken, controller.registerForContest);
-router.get('/:id/leaderboard', controller.contestLeaderboard);
+router.post('/:id/finalize', verifyAccessToken, requireRole('admin'), controller.adminFinalizeContest);
 
 module.exports = router;

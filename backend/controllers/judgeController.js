@@ -26,7 +26,17 @@ const updateJob = asyncHandler(async (req, res) => {
   res.json({ job });
 });
 
+const WORKER_STALE_THRESHOLD_MS = Number(process.env.JUDGE_WORKER_STALE_MS || 30_000);
+
 const listWorkers = asyncHandler(async (req, res) => {
+  const staleThreshold = new Date(Date.now() - WORKER_STALE_THRESHOLD_MS);
+
+  // Auto-mark workers whose heartbeat is older than the threshold as offline
+  await JudgeWorker.updateMany(
+    { status: { $ne: 'offline' }, lastHeartbeatAt: { $lt: staleThreshold } },
+    { $set: { status: 'offline', load: 0, activeJobs: 0 } }
+  );
+
   const workers = await JudgeWorker.find({}).sort({ status: 1, load: 1, region: 1 });
   res.json({ workers });
 });

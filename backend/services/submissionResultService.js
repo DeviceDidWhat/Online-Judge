@@ -1,6 +1,7 @@
 const Problem = require('../models/problem');
 const Submission = require('../models/submission');
 const { updateProgressForSubmission } = require('../utils/problemProgress');
+const { updateContestScore } = require('./contestService');
 
 const RESULT_FIELDS = [
   'verdict',
@@ -44,7 +45,20 @@ const applySubmissionResult = async (submissionId, result) => {
     await Problem.findByIdAndUpdate(submission.problem, { $inc: { acceptedSubmissions: 1 } });
   }
 
-  if (wasPending) await updateProgressForSubmission(submission);
+  if (wasPending) {
+    await updateProgressForSubmission(submission);
+
+    // If this submission belongs to a contest, update the contest leaderboard score
+    if (submission.contest) {
+      await updateContestScore(
+        submission.contest,
+        submission.user,
+        submission.problem,
+        submission
+      );
+    }
+  }
+
   return submission;
 };
 

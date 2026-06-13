@@ -4,6 +4,7 @@ const Problem = require('../models/problem');
 const Submission = require('../models/submission');
 const { runSubmission } = require('./judgeRunner');
 const { applySubmissionResult } = require('./submissionResultService');
+const { transitionContestStatuses } = require('./contestService');
 
 const workerId = process.env.JUDGE_WORKER_ID || `worker-${process.pid}`;
 const region = process.env.JUDGE_WORKER_REGION || 'local';
@@ -88,6 +89,9 @@ const processJob = async (job) => {
 };
 
 const tick = async () => {
+  // Transition contest statuses (upcoming → live → ended) and finalize ended contests
+  await transitionContestStatuses();
+
   await requeueStaleJobs();
   const worker = await heartbeat('online', 0);
   const job = await claimJob(worker);

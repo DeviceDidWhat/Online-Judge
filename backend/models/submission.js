@@ -19,6 +19,8 @@ const submissionSchema = new Schema({
   user: { type: Schema.Types.ObjectId, ref: 'User', required: true, index: true },
   problem: { type: Schema.Types.ObjectId, ref: 'Problem', required: true, index: true },
   problemTitle: { type: String, trim: true },
+  // Optional: links this submission to a contest context
+  contest: { type: Schema.Types.ObjectId, ref: 'Contest', index: true },
   language: { type: String, required: true, trim: true },
   sourceCode: { type: String, required: true },
   verdict: {
@@ -47,5 +49,6 @@ const submissionSchema = new Schema({
 
 submissionSchema.index({ user: 1, submittedAt: -1 });
 submissionSchema.index({ problem: 1, verdict: 1 });
+submissionSchema.index({ contest: 1, user: 1, problem: 1 });
 
 module.exports = mongoose.model('Submission', submissionSchema);
