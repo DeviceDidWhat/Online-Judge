@@ -1,6 +1,6 @@
-import { createFileRoute, Link } from "@tanstack/react-router";
+import { createFileRoute, Link, Outlet, useRouterState } from "@tanstack/react-router";
 import { formatDistanceToNow } from "date-fns";
-import { MessageCircle, Plus, ThumbsUp, ThumbsDown, Pin, Lock, Search, Code, Trophy, HelpCircle } from "lucide-react";
+import { MessageCircle, Plus, ThumbsUp, ThumbsDown, Lock, Search, Code, Trophy, HelpCircle } from "lucide-react";
 import { useEffect, useState, type FormEvent } from "react";
 import { AppShell } from "@/components/app-shell";
 import { Card } from "@/components/ui/card";
@@ -22,25 +22,27 @@ export const Route = createFileRoute("/discuss")({
 const availableTags = ["Tutorial", "Question", "Editorial", "Help", "Discussion"];
 
 function Discuss() {
+  const pathname = useRouterState({ select: (s) => s.location.pathname });
   const [q, setQ] = useState("");
   const [tag, setTag] = useState("All");
   const [sortBy, setSortBy] = useState("latest");
   const [discussions, setDiscussions] = useState<ApiDiscussion[]>([]);
   const [loading, setLoading] = useState(true);
-  
+
   const [dialogOpen, setDialogOpen] = useState(false);
   const [title, setTitle] = useState("");
   const [body, setBody] = useState("");
   const [selectedTag, setSelectedTag] = useState("Discussion");
   const [selectedProblem, setSelectedProblem] = useState<string>("none");
   const [selectedContest, setSelectedContest] = useState<string>("none");
-  
+
   const [problems, setProblems] = useState<ApiProblem[]>([]);
   const [contests, setContests] = useState<ApiContest[]>([]);
   const [saving, setSaving] = useState(false);
 
   // Fetch discussions when q, tag, or sortBy changes
   useEffect(() => {
+    if (pathname !== "/discuss") return;
     let cancelled = false;
     const delayId = setTimeout(() => {
       setLoading(true);
@@ -48,7 +50,7 @@ function Discuss() {
       if (q.trim()) params.set("q", q.trim());
       if (tag !== "All") params.set("tag", tag);
       if (sortBy !== "latest") params.set("sortBy", sortBy);
-      
+
       apiRequest<{ discussions: ApiDiscussion[]; pagination: ApiPagination }>(`/discussions?${params.toString()}`)
         .then((data) => {
           if (!cancelled) setDiscussions(data.discussions);
@@ -65,7 +67,7 @@ function Discuss() {
       cancelled = true;
       clearTimeout(delayId);
     };
-  }, [q, tag, sortBy]);
+  }, [q, tag, sortBy, pathname]);
 
   // Load problems and contests once or when dialog opens
   useEffect(() => {
@@ -78,6 +80,9 @@ function Discuss() {
       setContests(contestsData.contests || []);
     });
   }, [dialogOpen]);
+
+  // Delegate to the child route (e.g. /discuss/$id) after all hooks
+  if (pathname !== "/discuss") return <Outlet />;
 
   const handleCreateDiscussion = async (event: FormEvent) => {
     event.preventDefault();
@@ -206,11 +211,6 @@ function Discuss() {
                 
                 <div className="min-w-0 flex-1 space-y-1">
                   <div className="flex flex-wrap items-center gap-2">
-                    {discussion.isPinned && (
-                      <Badge variant="secondary" className="gap-1 bg-amber-500/10 text-amber-500 border-amber-500/20 text-[10px] uppercase font-bold py-0.5 px-2">
-                        <Pin className="h-3 w-3 fill-amber-500" /> Pinned
-                      </Badge>
-                    )}
                     {discussion.isLocked && (
                       <Badge variant="secondary" className="gap-1 bg-muted text-muted-foreground border-border text-[10px] uppercase font-bold py-0.5 px-2">
                         <Lock className="h-3 w-3" /> Locked

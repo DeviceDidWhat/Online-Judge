@@ -30,7 +30,7 @@ type AuthContextValue = {
   user: AuthUser | null;
   isLoading: boolean;
   login: (credentials: { email: string; password: string }) => Promise<void>;
-  register: (details: { username: string; email: string; password: string }) => Promise<void>;
+  register: (details: { username: string; email: string; password: string; country: string }) => Promise<void>;
   logout: () => Promise<void>;
 };
 
@@ -153,7 +153,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     setIsLoading(false);
   }, [setAuthState]);
 
-  const register = useCallback(async (details: { username: string; email: string; password: string }) => {
+  const register = useCallback(async (details: { username: string; email: string; password: string; country: string }) => {
     const data = await authRequest<AuthState>("/auth/register", details);
     authActionId.current += 1;
     setAuthState({ accessToken: data.accessToken, user: data.user });

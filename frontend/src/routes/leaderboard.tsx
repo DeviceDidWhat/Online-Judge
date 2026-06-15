@@ -1,4 +1,4 @@
-import { createFileRoute } from "@tanstack/react-router";
+import { createFileRoute, Link, useNavigate } from "@tanstack/react-router";
 import { useEffect, useMemo, useState } from "react";
 import { Crown, Medal, Search, Trophy } from "lucide-react";
 import { AppShell } from "@/components/app-shell";
@@ -17,6 +17,7 @@ const icons = [Crown, Medal, Trophy];
 const podiumColor = ["text-warning", "text-muted-foreground", "text-[oklch(0.65_0.18_45)]"];
 
 function Leaderboard() {
+  const navigate = useNavigate();
   const [q, setQ] = useState("");
   const [users, setUsers] = useState<ApiUser[]>([]);
   const [loading, setLoading] = useState(true);
@@ -73,23 +74,25 @@ function Leaderboard() {
           {top3.map((user, index) => {
             const Icon = icons[index];
             return (
-              <Card key={user._id ?? user.username} className="relative overflow-hidden border-border/60 bg-gradient-to-br from-card to-secondary/40 p-6 transition hover:border-primary/40">
-                <Icon className={`absolute right-4 top-4 h-6 w-6 ${podiumColor[index]}`} />
-                <div className="flex items-center gap-3">
-                  <Avatar className="h-14 w-14 ring-2 ring-primary/30">
-                    <AvatarImage src={user.avatar} /><AvatarFallback>{user.username[0]?.toUpperCase()}</AvatarFallback>
-                  </Avatar>
-                  <div>
-                    <div className="text-xs text-muted-foreground">Rank #{user.rank}</div>
-                    <div className="font-semibold">{user.username}</div>
-                    <div className="text-xs text-muted-foreground">{user.country ?? "??"}</div>
+              <Link key={user._id ?? user.username} to="/users/$username" params={{ username: user.username }}>
+                <Card className="relative overflow-hidden border-border/60 bg-gradient-to-br from-card to-secondary/40 p-6 transition hover:border-primary/40 cursor-pointer">
+                  <Icon className={`absolute right-4 top-4 h-6 w-6 ${podiumColor[index]}`} />
+                  <div className="flex items-center gap-3">
+                    <Avatar className="h-14 w-14 ring-2 ring-primary/30">
+                      <AvatarImage src={user.avatar} /><AvatarFallback>{user.username[0]?.toUpperCase()}</AvatarFallback>
+                    </Avatar>
+                    <div>
+                      <div className="text-xs text-muted-foreground">Rank #{user.rank}</div>
+                      <div className="font-semibold">{user.username}</div>
+                      <div className="text-xs text-muted-foreground">{user.country ?? "??"}</div>
+                    </div>
                   </div>
-                </div>
-                <div className="mt-4 grid grid-cols-2 gap-3 text-sm">
-                  <div><div className="text-xs text-muted-foreground">Rating</div><div className="text-lg font-bold gradient-text">{user.rating ?? 0}</div></div>
-                  <div><div className="text-xs text-muted-foreground">Solved</div><div className="text-lg font-bold">{user.solved?.total ?? 0}</div></div>
-                </div>
-              </Card>
+                  <div className="mt-4 grid grid-cols-2 gap-3 text-sm">
+                    <div><div className="text-xs text-muted-foreground">Rating</div><div className="text-lg font-bold gradient-text">{user.rating ?? 0}</div></div>
+                    <div><div className="text-xs text-muted-foreground">Solved</div><div className="text-lg font-bold">{user.solved?.total ?? 0}</div></div>
+                  </div>
+                </Card>
+              </Link>
             );
           })}
         </div>
@@ -101,7 +104,11 @@ function Leaderboard() {
             </thead>
             <tbody>
               {rest.map((user) => (
-                <tr key={user._id ?? user.username} className="border-t border-border/60 hover:bg-accent/30">
+                <tr
+                  key={user._id ?? user.username}
+                  className="border-t border-border/60 hover:bg-accent/30 cursor-pointer"
+                  onClick={() => navigate({ to: "/users/$username", params: { username: user.username } })}
+                >
                   <td className="px-4 py-3 font-mono text-muted-foreground">#{user.rank}</td>
                   <td className="px-4 py-3">
                     <div className="flex items-center gap-3">

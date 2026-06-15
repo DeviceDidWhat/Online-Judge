@@ -21,9 +21,12 @@ const contestRegistrationSchema = new Schema({
   penalty: { type: Number, default: 0, min: 0 },
   rank: { type: Number, min: 1 },
   solvedProblems: [solvedProblemSchema],
+  // Tiebreak key: submission time of the LATEST solved problem (ICPC last-solve time).
+  // Derived from submittedAt, NOT from judge-completion time, so it is order-independent.
+  lastSolveAt: { type: Date },
   // Rating delta applied after finalization
   ratingChange: { type: Number, default: 0 },
-}, { timestamps: true });
+}, { timestamps: true, optimisticConcurrency: true });
 
 contestRegistrationSchema.index({ contest: 1, user: 1 }, { unique: true });
 contestRegistrationSchema.index({ contest: 1, score: -1, penalty: 1 });

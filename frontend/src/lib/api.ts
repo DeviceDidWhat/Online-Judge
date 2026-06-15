@@ -111,6 +111,7 @@ export type ApiUser = {
   streak?: number;
   badges?: string[];
   joinedAt?: string;
+  isPrivate?: boolean;
   preferences?: {
     defaultLanguage?: string;
     editorFontSize?: number;

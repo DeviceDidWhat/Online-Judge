@@ -30,10 +30,14 @@ const sendRefreshTokenCookie = (res, token) => {
 // REGISTER
 const register = async (req, res) => {
   try {
-    const { username, email, password } = req.body;
+    const { username, email, password, country } = req.body;
 
     if (!username || !email || !password) {
       return res.status(400).json({ message: 'Username, email, and password are required' });
+    }
+
+    if (!country) {
+      return res.status(400).json({ message: 'Country is required' });
     }
 
     const existingEmail = await User.findOne({ email: email.toLowerCase() });
@@ -46,6 +50,7 @@ const register = async (req, res) => {
       username: username.trim(),
       email: email.toLowerCase(),
       password: hashed,
+      country: country.trim(),
     });
     await user.save();
 

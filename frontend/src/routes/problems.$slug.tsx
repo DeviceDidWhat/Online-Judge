@@ -1,5 +1,5 @@
 import { createFileRoute, Link } from "@tanstack/react-router";
-import { useEffect, useMemo, useState, type FormEvent } from "react";
+import { useEffect, useMemo, useRef, useState, type FormEvent } from "react";
 import Editor from "@monaco-editor/react";
 import { ArrowLeft, Bookmark, History, Lightbulb, Play, RotateCcw, Send, Terminal, MessageCircle, Plus, ThumbsUp, HelpCircle } from "lucide-react";
 import { Navbar } from "@/components/navbar";
@@ -20,6 +20,7 @@ import { useTheme } from "@/lib/theme";
 import { Input } from "@/components/ui/input";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { formatDistanceToNow } from "date-fns";
+import { useSubmissionStatus } from "@/hooks/use-submission-status";
 
 const availableTags = ["Tutorial", "Question", "Editorial", "Help", "Discussion"];
 
@@ -83,6 +84,13 @@ function ProblemDetail() {
   const [bottomTab, setBottomTab] = useState("testcase");
   const [resultSubmission, setResultSubmission] = useState<ApiSubmission | null>(null);
   const [submissions, setSubmissions] = useState<ApiSubmission[]>([]);
+  // The submission ID we are currently waiting for a verdict on (drives the socket listener).
+  const [watchingSubmissionId, setWatchingSubmissionId] = useState<string | null>(null);
+  // Keep a stable ref so reconnect callbacks can read the current ID without a dep.
+  const watchingIdRef = useRef<string | null>(null);
+  watchingIdRef.current = watchingSubmissionId;
+  // A ref to the 90-second safety timeout so we can clear it if the socket delivers early.
+  const fallbackTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // Discussion Integration States
   const [problemDiscussions, setProblemDiscussions] = useState<ApiDiscussion[]>([]);
@@ -211,6 +219,82 @@ function ProblemDetail() {
     }
   };
 
+  // ── WebSocket: receive submission verdict ───────────────────────────────────
+  useSubmissionStatus(
+    watchingSubmissionId,
+    (payload) => {
+      // Clear the safety fallback timer — we got the result via socket.
+      if (fallbackTimerRef.current) {
+        clearTimeout(fallbackTimerRef.current);
+        fallbackTimerRef.current = null;
+      }
+      setWatchingSubmissionId(null);
+
+      const latest = payload as ApiSubmission;
+      setOutput(resultText(latest));
+      setVerdict(latest.verdict);
+      setResultSubmission(latest);
+      setShowResult(true);
+      setSubmissions((current) => [
+        latest,
+        ...current.filter((item) => item.submissionId !== latest.submissionId),
+      ]);
+      setSubmitting(false);
+
+      if (latest.verdict === "Accepted")
+        toast.success(`Accepted — all ${latest.totalTestcases ?? 0} testcases passed`);
+      else if (latest.verdict === "Pending")
+        toast.warning("Still pending. Check submissions later.");
+      else toast.error(`Verdict: ${latest.verdict}`);
+    },
+    // Socket reconnected while waiting — the verdict may have been emitted
+    // during the brief disconnect.  Do an immediate HTTP poll to recover
+    // instead of waiting for the 90-second fallback timer.
+    () => {
+      const id = watchingIdRef.current;
+      if (!id) return;
+      if (fallbackTimerRef.current) {
+        clearTimeout(fallbackTimerRef.current);
+        fallbackTimerRef.current = null;
+      }
+      apiRequest<{ submission: ApiSubmission }>(`/submissions/${id}`)
+        .then((data) => {
+          const s = data.submission;
+          if (s.verdict === "Pending") {
+            // Still pending — restart the fallback timer for another 30 s.
+            fallbackTimerRef.current = setTimeout(async () => {
+              setWatchingSubmissionId(null);
+              try {
+                const retry = await apiRequest<{ submission: ApiSubmission }>(`/submissions/${id}`);
+                const rs = retry.submission;
+                setOutput(resultText(rs));
+                setVerdict(rs.verdict);
+                setResultSubmission(rs);
+                setShowResult(true);
+                setSubmissions((cur) => [rs, ...cur.filter((i) => i.submissionId !== rs.submissionId)]);
+                if (rs.verdict === "Pending") toast.warning("Still pending. Check submissions later.");
+                else toast.error(`Verdict: ${rs.verdict}`);
+              } catch { toast.error("Could not fetch submission result."); }
+              finally { setSubmitting(false); }
+            }, 30_000);
+            return;
+          }
+          // Verdict arrived — apply it immediately.
+          if (fallbackTimerRef.current) { clearTimeout(fallbackTimerRef.current); fallbackTimerRef.current = null; }
+          setWatchingSubmissionId(null);
+          setOutput(resultText(s));
+          setVerdict(s.verdict);
+          setResultSubmission(s);
+          setShowResult(true);
+          setSubmissions((cur) => [s, ...cur.filter((i) => i.submissionId !== s.submissionId)]);
+          setSubmitting(false);
+          if (s.verdict === "Accepted") toast.success(`Accepted — all ${s.totalTestcases ?? 0} testcases passed`);
+          else toast.error(`Verdict: ${s.verdict}`);
+        })
+        .catch(() => { /* original 90s timer already running */ });
+    },
+  );
+
   const onRun = () => {
     setBottomTab("output");
     setOutput("Running...");
@@ -264,29 +348,42 @@ function ProblemDetail() {
         body: JSON.stringify({ problemSlug: slug, language: lang, sourceCode: code }),
       });
 
-      let latest = created.submission;
+      const latest = created.submission;
       setOutput(`Submission ${latest.submissionId} queued. Waiting for judge...`);
 
-      for (let attempt = 0; attempt < 90; attempt += 1) {
-        await new Promise((resolve) => { setTimeout(resolve, 1000); });
-        const data = await apiRequest<{ submission: ApiSubmission }>(`/submissions/${created.submission.submissionId}`);
-        latest = data.submission;
-        setOutput(resultText(latest));
-        if (latest.verdict !== "Pending") break;
-      }
+      // Start watching for the socket push. The useSubmissionStatus hook will
+      // handle the result and clear submitting state when the verdict arrives.
+      setWatchingSubmissionId(latest.submissionId);
 
-      setVerdict(latest.verdict);
-      setResultSubmission(latest);
-      setShowResult(true);
-      setSubmissions((current) => [latest, ...current.filter((item) => item.submissionId !== latest.submissionId)]);
-      if (latest.verdict === "Accepted") toast.success(`Accepted - all ${latest.totalTestcases ?? 0} testcases passed`);
-      else if (latest.verdict === "Pending") toast.warning("Still pending. Check submissions later.");
-      else toast.error(`Verdict: ${latest.verdict}`);
+      // Safety fallback: if the socket doesn't deliver within 90 s, stop spinning
+      // and do a single HTTP fetch to show whatever the judge has.
+      fallbackTimerRef.current = setTimeout(async () => {
+        setWatchingSubmissionId(null);
+        try {
+          const data = await apiRequest<{ submission: ApiSubmission }>(
+            `/submissions/${latest.submissionId}`
+          );
+          const s = data.submission;
+          setOutput(resultText(s));
+          setVerdict(s.verdict);
+          setResultSubmission(s);
+          setShowResult(true);
+          setSubmissions((current) => [
+            s,
+            ...current.filter((item) => item.submissionId !== s.submissionId),
+          ]);
+          if (s.verdict === "Pending") toast.warning("Still pending. Check submissions later.");
+          else toast.error(`Verdict: ${s.verdict}`);
+        } catch {
+          toast.error("Could not fetch submission result.");
+        } finally {
+          setSubmitting(false);
+        }
+      }, 90_000);
     } catch (error) {
       const message = error instanceof Error ? error.message : "Submission failed";
       setOutput(message);
       toast.error(message);
-    } finally {
       setSubmitting(false);
     }
   };
@@ -345,7 +442,7 @@ function ProblemDetail() {
                       <div><div className="text-muted-foreground">Runtime</div><div className="font-mono">{submission.runtime ?? 0} ms</div></div>
                       <div><div className="text-muted-foreground">Memory</div><div className="font-mono">{submission.memory ?? 0} MB</div></div>
                     </div>
-                    <div className="mt-1 text-[10px] text-muted-foreground font-mono">{submission.submittedAt.replace("T", " ").slice(0, 16)}</div>
+                    <div className="mt-1 text-[10px] text-muted-foreground font-mono">{submission.submittedAt?.replace("T", " ").slice(0, 16) ?? "—"}</div>
                   </div>
                 ))}
               </div>

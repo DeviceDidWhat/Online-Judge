@@ -1,7 +1,9 @@
 const Problem = require('../models/problem');
 const Submission = require('../models/submission');
+const ContestRegistration = require('../models/contestRegistration');
 const { updateProgressForSubmission } = require('../utils/problemProgress');
 const { updateContestScore } = require('./contestService');
+const { getIO } = require('../socket');
 
 const RESULT_FIELDS = [
   'verdict',
@@ -48,14 +50,52 @@ const applySubmissionResult = async (submissionId, result) => {
   if (wasPending) {
     await updateProgressForSubmission(submission);
 
-    // If this submission belongs to a contest, update the contest leaderboard score
+    // ── Emit submission result to the submitting user via WebSocket ──────────
+    try {
+      const io = getIO();
+      io.to(`user:${submission.user}`).emit('submission:result', {
+        submissionId: submission.submissionId,
+        verdict: submission.verdict,
+        language: submission.language,
+        submittedAt: submission.submittedAt,
+        runtime: submission.runtime,
+        memory: submission.memory,
+        testcasesPassed: submission.testcasesPassed,
+        totalTestcases: submission.totalTestcases,
+        stdout: submission.stdout,
+        stderr: submission.stderr,
+        compileOutput: submission.compileOutput,
+        failedTestcase: submission.failedTestcase,
+        testcaseResults: submission.testcaseResults,
+        judgedAt: submission.judgedAt,
+      });
+    } catch {
+      // Socket not available (e.g. standalone worker process) — skip silently.
+    }
+
+    // If this submission belongs to a contest, recompute the contest leaderboard score.
+    // Runs on every judged contest submission (AC or wrong) so penalties settle
+    // correctly regardless of the order the judge finishes submissions in.
     if (submission.contest) {
       await updateContestScore(
         submission.contest,
         submission.user,
-        submission.problem,
-        submission
+        submission.problem
       );
+
+      // ── Broadcast refreshed leaderboard to contest room ──────────────────
+      try {
+        const io = getIO();
+        const leaderboard = await ContestRegistration.find({ contest: submission.contest })
+          .populate('user', 'username avatar rating')
+          .sort({ score: -1, penalty: 1, lastSolveAt: 1 });
+        io.to(`contest:${submission.contest}`).emit('contest:leaderboard', {
+          contestId: String(submission.contest),
+          leaderboard,
+        });
+      } catch {
+        // Socket not available — skip silently.
+      }
     }
   }
 

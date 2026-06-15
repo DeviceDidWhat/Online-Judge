@@ -1,5 +1,6 @@
 const Notification = require('../models/notification');
 const { asyncHandler, parsePagination } = require('../utils/controller');
+const { getIO } = require('../socket');
 
 const listNotifications = asyncHandler(async (req, res) => {
   const { page, limit, skip } = parsePagination(req.query, { limit: 20 });
@@ -17,6 +18,26 @@ const listNotifications = asyncHandler(async (req, res) => {
 
 const createNotification = asyncHandler(async (req, res) => {
   const notification = await Notification.create(req.body);
+
+  // Push to the target user's private socket room if they're connected.
+  try {
+    const io = getIO();
+    const userId = req.body.user;
+    if (userId) {
+      io.to(`user:${userId}`).emit('notification:new', {
+        _id: notification._id,
+        title: notification.title,
+        body: notification.body,
+        type: notification.type,
+        unread: notification.unread,
+        link: notification.link,
+        createdAt: notification.createdAt,
+      });
+    }
+  } catch {
+    // Socket not available — skip silently.
+  }
+
   res.status(201).json({ notification });
 });
 

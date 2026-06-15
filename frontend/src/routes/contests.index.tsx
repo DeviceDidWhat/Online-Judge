@@ -1,11 +1,12 @@
 import { createFileRoute, Link } from "@tanstack/react-router";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Clock, Trophy, Users } from "lucide-react";
 import { AppShell } from "@/components/app-shell";
 import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { apiRequest, type ApiContest, type ApiPagination } from "@/lib/api";
+import { apiRequest, type ApiContest, type ApiContestStatus, type ApiPagination } from "@/lib/api";
+import { getSocket } from "@/lib/socket";
 import { toast } from "sonner";
 
 export const Route = createFileRoute("/contests/")({
@@ -13,13 +14,23 @@ export const Route = createFileRoute("/contests/")({
   component: Contests,
 });
 
-function Countdown({ to }: { to: string }) {
+function Countdown({ to, onExpired }: { to: string; onExpired?: () => void }) {
   const [now, setNow] = useState(Date.now());
+  const onExpiredRef = useRef(onExpired);
+  onExpiredRef.current = onExpired;
+
   useEffect(() => {
     const id = setInterval(() => setNow(Date.now()), 1000);
     return () => clearInterval(id);
   }, []);
+
   const diff = Math.max(0, new Date(to).getTime() - now);
+  const hasExpired = diff === 0;
+
+  useEffect(() => {
+    if (hasExpired) onExpiredRef.current?.();
+  }, [hasExpired]); // eslint-disable-line react-hooks/exhaustive-deps
+
   const d = Math.floor(diff / 86400000);
   const h = Math.floor((diff / 3600000) % 24);
   const m = Math.floor((diff / 60000) % 60);
@@ -55,6 +66,41 @@ function Contests() {
       });
     return () => {
       cancelled = true;
+    };
+  }, []);
+
+  // Real-time status and participant updates from server
+  useEffect(() => {
+    const socket = getSocket();
+    if (!socket.connected) socket.connect();
+
+    const handleStatusChange = (payload: { contestId: string; status: ApiContestStatus }) => {
+      setContests((prev) =>
+        prev.map((c) => (c._id === payload.contestId ? { ...c, status: payload.status } : c))
+      );
+    };
+
+    const handleParticipantUpdate = (payload: { contestId: string; registeredCount: number }) => {
+      setContests((prev) =>
+        prev.map((c) => (c._id === payload.contestId ? { ...c, registeredCount: payload.registeredCount } : c))
+      );
+    };
+
+    const handleNewContest = (payload: { contest: ApiContest }) => {
+      setContests((prev) => {
+        // Guard against duplicates (e.g. if the admin's own browser also receives the broadcast)
+        if (prev.some((c) => c._id === payload.contest._id)) return prev;
+        return [payload.contest, ...prev];
+      });
+    };
+
+    socket.on("contest:statusChange", handleStatusChange);
+    socket.on("contest:participantUpdate", handleParticipantUpdate);
+    socket.on("contest:new", handleNewContest);
+    return () => {
+      socket.off("contest:statusChange", handleStatusChange);
+      socket.off("contest:participantUpdate", handleParticipantUpdate);
+      socket.off("contest:new", handleNewContest);
     };
   }, []);
 
@@ -103,7 +149,16 @@ function Contests() {
                   </div>
                   <Trophy className="h-5 w-5 text-warning" />
                 </div>
-                <div className="mt-4"><Countdown to={contest.startsAt} /></div>
+                <div className="mt-4">
+                  <Countdown
+                    to={contest.startsAt}
+                    onExpired={() =>
+                      setContests((prev) =>
+                        prev.map((c) => (c._id === contest._id ? { ...c, status: "live" } : c))
+                      )
+                    }
+                  />
+                </div>
                 <div className="mt-4 flex items-center justify-between">
                   <div className="text-xs text-muted-foreground inline-flex items-center gap-1"><Users className="h-3 w-3" /> {contest.registeredCount.toLocaleString()} registered</div>
                   <Button asChild variant="outline"><Link to="/contests/$id" params={{ id: String(contest.contestId) }}>Register</Link></Button>

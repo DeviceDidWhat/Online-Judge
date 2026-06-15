@@ -25,4 +25,18 @@ const contestSchema = new Schema({
 
 contestSchema.index({ name: 'text' });
 
+// Auto-assign a sequential contestId when one isn't explicitly provided.
+// Runs before validation so the `required` constraint is satisfied.
+contestSchema.pre('validate', async function autoContestId(next) {
+  try {
+    if (this.contestId == null) {
+      const last = await this.constructor.findOne().sort({ contestId: -1 }).select('contestId').lean();
+      this.contestId = last && last.contestId ? last.contestId + 1 : 1;
+    }
+    next();
+  } catch (err) {
+    next(err);
+  }
+});
+
 module.exports = mongoose.model('Contest', contestSchema);

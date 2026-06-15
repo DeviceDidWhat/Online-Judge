@@ -4,7 +4,6 @@ import {
   ArrowLeft,
   ThumbsUp,
   ThumbsDown,
-  Pin,
   Lock,
   Edit,
   Trash,
@@ -200,20 +199,6 @@ function DiscussionDetail() {
     }
   };
 
-  const handleTogglePin = async () => {
-    if (!discussion || user?.role !== "admin") return;
-    try {
-      const data = await apiRequest<{ discussion: ApiDiscussion }>(`/discussions/${discussion._id}`, {
-        method: "PUT",
-        body: JSON.stringify({ isPinned: !discussion.isPinned }),
-      });
-      setDiscussion(data.discussion);
-      toast.success(data.discussion.isPinned ? "Discussion pinned" : "Discussion unpinned");
-    } catch (error) {
-      toast.error(error instanceof Error ? error.message : "Unable to update thread");
-    }
-  };
-
   const handleToggleLock = async () => {
     if (!discussion || user?.role !== "admin") return;
     try {
@@ -399,11 +384,6 @@ function DiscussionDetail() {
 
                 <div className="min-w-0 flex-1 space-y-1.5">
                   <div className="flex flex-wrap items-center gap-2">
-                    {discussion.isPinned && (
-                      <Badge variant="secondary" className="gap-1 bg-amber-500/10 text-amber-500 border-amber-500/20 text-[10px] uppercase font-bold py-0.5 px-2">
-                        <Pin className="h-3 w-3 fill-amber-500" /> Pinned
-                      </Badge>
-                    )}
                     {discussion.isLocked && (
                       <Badge variant="secondary" className="gap-1 bg-muted text-muted-foreground border-border text-[10px] uppercase font-bold py-0.5 px-2">
                         <Lock className="h-3 w-3" /> Locked
@@ -446,14 +426,9 @@ function DiscussionDetail() {
                     </>
                   )}
                   {isAdmin && (
-                    <>
-                      <Button variant="ghost" size="icon" className={`h-8 w-8 ${discussion.isPinned ? "text-amber-500 bg-amber-500/10" : "text-muted-foreground hover:text-amber-500"}`} onClick={handleTogglePin}>
-                        <Pin className="h-4 w-4" />
-                      </Button>
-                      <Button variant="ghost" size="icon" className={`h-8 w-8 ${discussion.isLocked ? "text-red-500 bg-red-500/10" : "text-muted-foreground hover:text-red-500"}`} onClick={handleToggleLock}>
-                        <Lock className="h-4 w-4" />
-                      </Button>
-                    </>
+                    <Button variant="ghost" size="icon" className={`h-8 w-8 ${discussion.isLocked ? "text-red-500 bg-red-500/10" : "text-muted-foreground hover:text-red-500"}`} onClick={handleToggleLock}>
+                      <Lock className="h-4 w-4" />
+                    </Button>
                   )}
                 </div>
               </div>

@@ -5,8 +5,10 @@ import { useEffect, useState, type FormEvent } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { toast } from "sonner";
 import { useAuth } from "@/lib/auth";
+import { COUNTRIES } from "@/lib/countries";
 
 export const Route = createFileRoute("/register")({
   head: () => ({ meta: [{ title: "Register - CodeArena" }] }),
@@ -19,6 +21,7 @@ function Register() {
   const [username, setUsername] = useState("");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
+  const [country, setCountry] = useState("");
   const [isSubmitting, setIsSubmitting] = useState(false);
 
   useEffect(() => {
@@ -29,10 +32,14 @@ function Register() {
 
   const onSubmit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
+    if (!country) {
+      toast.error("Please select your country");
+      return;
+    }
     setIsSubmitting(true);
 
     try {
-      await register({ username, email, password });
+      await register({ username, email, password, country });
       toast.success("Account created.");
       navigate({ to: "/dashboard", replace: true });
     } catch (error) {
@@ -91,6 +98,21 @@ function Register() {
               minLength={6}
               required
             />
+          </div>
+          <div className="space-y-2">
+            <Label>Country <span className="text-destructive">*</span></Label>
+            <Select value={country} onValueChange={setCountry} required>
+              <SelectTrigger>
+                <SelectValue placeholder="Select your country" />
+              </SelectTrigger>
+              <SelectContent className="max-h-60">
+                {COUNTRIES.map((c) => (
+                  <SelectItem key={c.code} value={c.name}>
+                    {c.name}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
           </div>
           <Button className="w-full gradient-primary text-primary-foreground shadow-glow" disabled={isSubmitting}>
             {isSubmitting && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}

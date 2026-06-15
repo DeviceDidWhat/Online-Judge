@@ -18,11 +18,11 @@ const listDiscussions = asyncHandler(async (req, res) => {
     filter.$or = [{ title: regex }, { body: regex }, { tags: regex }];
   }
 
-  let sort = { isPinned: -1, createdAt: -1 };
+  let sort = { createdAt: -1 };
   if (req.query.sortBy === 'top') {
-    sort = { isPinned: -1, upvotes: -1, createdAt: -1 };
+    sort = { upvotes: -1, createdAt: -1 };
   } else if (req.query.sortBy === 'active') {
-    sort = { isPinned: -1, updatedAt: -1 };
+    sort = { updatedAt: -1 };
   }
 
   let discussions;
@@ -36,7 +36,7 @@ const listDiscussions = asyncHandler(async (req, res) => {
         commentsCount: { $size: { $ifNull: ["$comments", []] } }
       }
     };
-    const sortStage = { $sort: { isPinned: -1, commentsCount: -1, createdAt: -1 } };
+    const sortStage = { $sort: { commentsCount: -1, createdAt: -1 } };
     const skipStage = { $skip: skip };
     const limitStage = { $limit: limit };
 
@@ -171,7 +171,7 @@ const updateDiscussion = asyncHandler(async (req, res) => {
   if (!canModify(req, discussion)) return res.status(403).json({ message: 'Access denied' });
 
   const allowed = req.user.role === 'admin'
-    ? ['title', 'body', 'tags', 'isPinned', 'isLocked', 'problem', 'contest']
+    ? ['title', 'body', 'tags', 'isLocked', 'problem', 'contest']
     : ['title', 'body', 'tags', 'problem', 'contest'];
 
   for (const key of allowed) {

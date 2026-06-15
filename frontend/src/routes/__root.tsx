@@ -6,9 +6,11 @@ import {
 } from "@tanstack/react-router";
 import appCss from "../styles.css?url";
 import { ThemeProvider } from "@/lib/theme";
-import { AuthProvider } from "@/lib/auth";
+import { AuthProvider, useAuth } from "@/lib/auth";
 import { Toaster } from "@/components/ui/sonner";
 import { TooltipProvider } from "@/components/ui/tooltip";
+import { toast } from "sonner";
+import { getSocket, reconnectSocket, destroySocket } from "@/lib/socket";
 
 function NotFoundComponent() {
   const [typedLines, setTypedLines] = React.useState<string[]>([]);
@@ -180,16 +182,61 @@ function RootShell({ children }: { children: React.ReactNode }) {
   );
 }
 
+// ── Socket lifecycle tied to auth state ─────────────────────────────────────────
+function SocketProvider({ children }: { children: React.ReactNode }) {
+  const { user, isLoading } = useAuth();
+
+  React.useEffect(() => {
+    // Wait until auth resolves before touching the socket.
+    if (isLoading) return;
+
+    if (user) {
+      // User is logged in — connect (or reconnect with fresh token).
+      reconnectSocket();
+    } else {
+      // User logged out — destroy so next login gets a fresh authenticated connection.
+      destroySocket();
+    }
+  }, [user, isLoading]);
+
+  // Global notification toast listener.
+  React.useEffect(() => {
+    if (!user) return;
+
+    const socket = getSocket();
+    const handler = (notification: {
+      title: string;
+      body: string;
+      type: string;
+      link?: string;
+    }) => {
+      toast.info(notification.title, {
+        description: notification.body,
+        action: notification.link
+          ? { label: 'View', onClick: () => window.location.assign(notification.link!) }
+          : undefined,
+      });
+    };
+
+    socket.on('notification:new', handler);
+    return () => { socket.off('notification:new', handler); };
+  }, [user]);
+
+  return <>{children}</>;
+}
+
 function RootComponent() {
   const { queryClient } = Route.useRouteContext();
   return (
     <QueryClientProvider client={queryClient}>
       <ThemeProvider>
         <AuthProvider>
-          <TooltipProvider>
-            <Outlet />
-            <Toaster />
-          </TooltipProvider>
+          <SocketProvider>
+            <TooltipProvider>
+              <Outlet />
+              <Toaster />
+            </TooltipProvider>
+          </SocketProvider>
         </AuthProvider>
       </ThemeProvider>
     </QueryClientProvider>

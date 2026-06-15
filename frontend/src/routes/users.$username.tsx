@@ -1,7 +1,7 @@
-import { createFileRoute } from "@tanstack/react-router";
+import { createFileRoute, Link } from "@tanstack/react-router";
 import { useEffect, useState } from "react";
 import { format } from "date-fns";
-import { Calendar, MapPin, TrendingUp, TrendingDown } from "lucide-react";
+import { ArrowLeft, Calendar, Lock, MapPin, TrendingDown, TrendingUp } from "lucide-react";
 import {
   AreaChart, Area, XAxis, YAxis, CartesianGrid,
   Tooltip as ChartTooltip, ResponsiveContainer,
@@ -10,18 +10,18 @@ import { AppShell } from "@/components/app-shell";
 import { Card } from "@/components/ui/card";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Heatmap } from "@/components/heatmap";
 import { VerdictBadge } from "@/components/verdict-badge";
 import { apiRequest, type ApiActivity, type ApiRatingHistory, type ApiSubmission, type ApiUser } from "@/lib/api";
 import { toast } from "sonner";
 
-export const Route = createFileRoute("/profile")({
-  head: () => ({ meta: [{ title: "Profile - CodeArena" }] }),
-  component: Profile,
+export const Route = createFileRoute("/users/$username")({
+  head: ({ params }) => ({ meta: [{ title: `${params.username} - CodeArena` }] }),
+  component: UserProfile,
 });
 
-// ─── Rating tier helper ───────────────────────────────────────────────────────
 function getRatingTier(rating: number): { label: string; color: string } {
   if (rating >= 3000) return { label: "Legendary", color: "text-red-300" };
   if (rating >= 2600) return { label: "International Grandmaster", color: "text-red-400" };
@@ -35,7 +35,6 @@ function getRatingTier(rating: number): { label: string; color: string } {
   return { label: "Newbie", color: "text-muted-foreground" };
 }
 
-// ─── Rating Chart ────────────────────────────────────────────────────────────
 type ChartPoint = { label: string; rating: number; change: number; rank?: number };
 
 function RatingTooltip({ active, payload }: { active?: boolean; payload?: { payload: ChartPoint }[] }) {
@@ -60,7 +59,7 @@ function RatingChart({ history }: { history: ApiRatingHistory[] }) {
   if (history.length === 0) {
     return (
       <div className="flex h-48 items-center justify-center text-sm text-muted-foreground">
-        No rating history yet. Compete in a contest to get your first rating!
+        No rating history yet.
       </div>
     );
   }
@@ -73,7 +72,6 @@ function RatingChart({ history }: { history: ApiRatingHistory[] }) {
   const ratings = data.map((d) => d.rating);
   const rawMin = Math.min(...ratings);
   const rawMax = Math.max(...ratings);
-  // Round domain to clean 200-point intervals
   const minY = Math.max(0, Math.floor((rawMin - 100) / 200) * 200);
   const maxY = Math.ceil((rawMax + 100) / 200) * 200;
   const tickCount = Math.round((maxY - minY) / 200) + 1;
@@ -82,7 +80,7 @@ function RatingChart({ history }: { history: ApiRatingHistory[] }) {
     <ResponsiveContainer width="100%" height={220}>
       <AreaChart data={data} margin={{ top: 8, right: 12, left: 0, bottom: 0 }}>
         <defs>
-          <linearGradient id="ratingGrad" x1="0" y1="0" x2="0" y2="1">
+          <linearGradient id="ratingGradPublic" x1="0" y1="0" x2="0" y2="1">
             <stop offset="5%" stopColor="oklch(0.72 0.18 145)" stopOpacity={0.3} />
             <stop offset="95%" stopColor="oklch(0.72 0.18 145)" stopOpacity={0.03} />
           </linearGradient>
@@ -106,7 +104,7 @@ function RatingChart({ history }: { history: ApiRatingHistory[] }) {
           dataKey="rating"
           stroke="oklch(0.72 0.18 145)"
           strokeWidth={2}
-          fill="url(#ratingGrad)"
+          fill="url(#ratingGradPublic)"
           dot={{ r: 3, fill: "oklch(0.72 0.18 145)", stroke: "oklch(0.15 0.014 250)", strokeWidth: 2 }}
           activeDot={{ r: 5, fill: "oklch(0.72 0.18 145)", stroke: "oklch(0.15 0.014 250)", strokeWidth: 2 }}
         />
@@ -115,42 +113,97 @@ function RatingChart({ history }: { history: ApiRatingHistory[] }) {
   );
 }
 
-// ─── Main Profile ─────────────────────────────────────────────────────────────
-function Profile() {
+function UserProfile() {
+  const { username } = Route.useParams();
   const [user, setUser] = useState<ApiUser | null>(null);
-  const [activity, setActivity] = useState<ApiActivity[]>([]);
   const [submissions, setSubmissions] = useState<ApiSubmission[]>([]);
   const [ratingHistory, setRatingHistory] = useState<ApiRatingHistory[]>([]);
+  const [activity, setActivity] = useState<ApiActivity[]>([]);
   const [loading, setLoading] = useState(true);
+  const [isPrivate, setIsPrivate] = useState(false);
+  const [notFound, setNotFound] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
     setLoading(true);
+    setIsPrivate(false);
+    setNotFound(false);
+
+    const encoded = encodeURIComponent(username);
     Promise.all([
-      apiRequest<{ user: ApiUser }>("/users/me"),
-      apiRequest<{ activity: ApiActivity[] }>("/users/me/activity?days=365"),
-      apiRequest<{ submissions: ApiSubmission[] }>("/submissions?limit=8"),
-      apiRequest<{ history: ApiRatingHistory[] }>("/ratings/me"),
+      apiRequest<{ user: ApiUser; recentSubmissions: ApiSubmission[]; ratingHistory: ApiRatingHistory[] }>(
+        `/users/${encoded}`
+      ),
+      apiRequest<{ activity: ApiActivity[] }>(`/users/${encoded}/activity?days=365`).catch(() => ({ activity: [] })),
     ])
-      .then(([userData, activityData, submissionData, ratingData]) => {
+      .then(([profileData, activityData]) => {
         if (cancelled) return;
-        setUser(userData.user);
-        setActivity(activityData.activity);
-        setSubmissions(submissionData.submissions);
-        setRatingHistory(ratingData.history);
+        setUser(profileData.user);
+        setSubmissions(profileData.recentSubmissions ?? []);
+        setRatingHistory(profileData.ratingHistory ?? []);
+        setActivity(activityData.activity ?? []);
       })
       .catch((error) => {
-        if (!cancelled) toast.error(error instanceof Error ? error.message : "Unable to load profile");
+        if (cancelled) return;
+        const msg = error instanceof Error ? error.message : "";
+        if (msg === "This profile is private") {
+          setIsPrivate(true);
+        } else if (msg === "User not found") {
+          setNotFound(true);
+        } else {
+          toast.error(msg || "Unable to load profile");
+        }
       })
       .finally(() => {
         if (!cancelled) setLoading(false);
       });
-    return () => {
-      cancelled = true;
-    };
-  }, []);
 
-  const name = user?.name || user?.username || "Coder";
+    return () => { cancelled = true; };
+  }, [username]);
+
+  if (loading) {
+    return (
+      <AppShell>
+        <div className="flex min-h-64 items-center justify-center">
+          <div className="text-sm text-muted-foreground">Loading profile…</div>
+        </div>
+      </AppShell>
+    );
+  }
+
+  if (notFound) {
+    return (
+      <AppShell>
+        <div className="mx-auto max-w-xl p-6 text-center space-y-4 pt-20">
+          <p className="text-4xl font-bold text-muted-foreground">404</p>
+          <p className="text-lg font-semibold">User not found</p>
+          <p className="text-sm text-muted-foreground">No user with the username <span className="font-mono font-medium">@{username}</span> exists.</p>
+          <Button asChild variant="outline" size="sm">
+            <Link to="/leaderboard"><ArrowLeft className="mr-2 h-4 w-4" />Back to Leaderboard</Link>
+          </Button>
+        </div>
+      </AppShell>
+    );
+  }
+
+  if (isPrivate) {
+    return (
+      <AppShell>
+        <div className="mx-auto max-w-xl p-6 text-center space-y-4 pt-20">
+          <Lock className="mx-auto h-12 w-12 text-muted-foreground" />
+          <p className="text-lg font-semibold">This profile is private</p>
+          <p className="text-sm text-muted-foreground">
+            <span className="font-mono font-medium">@{username}</span> has chosen to keep their profile private.
+          </p>
+          <Button asChild variant="outline" size="sm">
+            <Link to="/leaderboard"><ArrowLeft className="mr-2 h-4 w-4" />Back to Leaderboard</Link>
+          </Button>
+        </div>
+      </AppShell>
+    );
+  }
+
+  const name = user?.name || user?.username || username;
   const joined = user?.joinedAt ? format(new Date(user.joinedAt), "MMM d, yyyy") : "-";
   const tier = user?.rating !== undefined ? getRatingTier(user.rating) : null;
 
@@ -163,24 +216,25 @@ function Profile() {
   return (
     <AppShell>
       <div className="mx-auto max-w-6xl space-y-6 p-6">
-        {/* Profile header */}
+        <Button asChild variant="ghost" size="sm" className="-ml-2">
+          <Link to="/leaderboard"><ArrowLeft className="mr-2 h-4 w-4" />Leaderboard</Link>
+        </Button>
+
         <Card className="overflow-hidden border-border/60">
           <div className="h-36 gradient-primary opacity-80" />
           <div className="px-6 pb-6">
-            {/* Avatar + identity */}
             <div className="flex items-end gap-4 -mt-14 mb-4">
               <Avatar className="h-28 w-28 shrink-0 ring-4 ring-background">
                 <AvatarImage src={user?.avatar} />
                 <AvatarFallback className="text-2xl">{name.slice(0, 2).toUpperCase()}</AvatarFallback>
               </Avatar>
               <div className="min-w-0 flex-1 pb-1">
-                <h1 className="relative z-5000 truncate text-2xl font-bold leading-tight">{name}</h1>
-                <p className="truncate text-sm text-muted-foreground">@{user?.username ?? "loading"}</p>
+                <h1 className="relative truncate z-500 text-2xl font-bold leading-tight">{name}</h1>
+                <p className="truncate text-sm text-muted-foreground">@{user?.username ?? username}</p>
                 {tier && <p className={`text-xs font-medium mt-0.5 ${tier.color}`}>{tier.label}</p>}
               </div>
             </div>
 
-            {/* Location + join date */}
             <div className="mb-5 flex flex-wrap gap-4 text-xs text-muted-foreground">
               {user?.country && (
                 <span className="inline-flex items-center gap-1.5">
@@ -192,7 +246,6 @@ function Profile() {
               </span>
             </div>
 
-            {/* Stats grid */}
             <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
               <div className="rounded-xl bg-muted/40 p-4 text-center">
                 <div className="text-xl font-bold gradient-text">{user?.rating ?? 1200}</div>
@@ -220,7 +273,6 @@ function Profile() {
           </div>
         </Card>
 
-        {/* Stats row */}
         <div className="grid gap-4 md:grid-cols-3">
           {([
             ["Easy", user?.solved?.easy ?? 0, "text-success"],
@@ -237,13 +289,11 @@ function Profile() {
           ))}
         </div>
 
-        {/* Activity heatmap */}
         <Card className="border-border/60 p-5">
           <h3 className="mb-4 font-semibold">Submission activity</h3>
           <Heatmap days={activity} />
         </Card>
 
-        {/* Tabs */}
         <Tabs defaultValue="rating">
           <TabsList>
             <TabsTrigger value="rating">Rating History</TabsTrigger>
@@ -251,7 +301,6 @@ function Profile() {
             <TabsTrigger value="badges">Badges</TabsTrigger>
           </TabsList>
 
-          {/* Rating history */}
           <TabsContent value="rating" className="pt-4">
             <Card className="border-border/60 p-5">
               <div className="mb-4 flex items-center justify-between">
@@ -259,50 +308,24 @@ function Profile() {
                 <span className="text-xs text-muted-foreground">{ratingHistory.length} contest{ratingHistory.length !== 1 ? "s" : ""}</span>
               </div>
               <RatingChart history={ratingHistory} />
-
-              {/* Contest history table */}
-              {ratingHistory.length > 0 && (
-                <div className="mt-4 border-t border-border/60 pt-4">
-                  <div className="grid grid-cols-4 px-2 pb-2 text-xs font-medium uppercase tracking-wide text-muted-foreground">
-                    <span>Contest</span>
-                    <span className="text-center">Rank</span>
-                    <span className="text-right">Rating</span>
-                    <span className="text-right">Change</span>
-                  </div>
-                  <div className="max-h-56 space-y-0.5 overflow-y-auto scrollbar-none [&::-webkit-scrollbar]:hidden">
-                    {[...ratingHistory].reverse().map((entry) => (
-                      <div key={entry._id} className="grid grid-cols-4 items-center rounded-lg px-2 py-2 text-sm transition hover:bg-accent/30">
-                        <span className="truncate text-xs font-medium">{entry.contestName}</span>
-                        <span className="text-center text-xs text-muted-foreground">{entry.rank != null ? `#${entry.rank}` : "—"}</span>
-                        <span className="text-right font-mono font-bold">{entry.rating}</span>
-                        <span className={`text-right font-mono text-xs font-bold ${entry.change > 0 ? "text-green-400" : entry.change < 0 ? "text-red-400" : "text-muted-foreground"}`}>
-                          {entry.change > 0 ? "+" : ""}{entry.change}
-                        </span>
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              )}
             </Card>
           </TabsContent>
 
-          {/* Recent submissions */}
           <TabsContent value="recent" className="pt-4 space-y-2">
             {submissions.map((submission) => (
               <div key={submission.submissionId} className="flex items-center justify-between rounded-lg border border-border/60 p-3">
-                <div className="text-sm font-medium">{submission.problemTitle}</div>
+                <div className="text-sm font-medium">{submission.problemTitle ?? submission.problem?.title}</div>
                 <VerdictBadge verdict={submission.verdict} />
               </div>
             ))}
-            {!loading && submissions.length === 0 && <p className="text-sm text-muted-foreground">No submissions yet.</p>}
+            {submissions.length === 0 && <p className="text-sm text-muted-foreground">No submissions yet.</p>}
           </TabsContent>
 
-          {/* Badges */}
           <TabsContent value="badges" className="pt-4 flex flex-wrap gap-2">
             {(user?.badges ?? []).map((badge) => (
               <Badge key={badge} variant="secondary" className="px-3 py-1.5">{badge}</Badge>
             ))}
-            {!loading && (user?.badges ?? []).length === 0 && <p className="text-sm text-muted-foreground">No badges yet.</p>}
+            {(user?.badges ?? []).length === 0 && <p className="text-sm text-muted-foreground">No badges yet.</p>}
           </TabsContent>
         </Tabs>
       </div>

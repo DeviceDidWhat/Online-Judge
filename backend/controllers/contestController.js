@@ -6,6 +6,7 @@ const Submission = require('../models/submission');
 const JudgeJob = require('../models/judgeJob');
 const { finalizeContest } = require('../services/contestService');
 const { asyncHandler, parsePagination, escapeRegExp, isObjectId } = require('../utils/controller');
+const { getIO } = require('../socket');
 
 const contestLookup = (id) => {
   const query = [{ contestId: Number(id) || -1 }];
@@ -68,6 +69,12 @@ const createContest = asyncHandler(async (req, res) => {
     createdBy: req.user.id,
   });
 
+  // Broadcast to all connected clients so the contests list updates instantly
+  try {
+    const io = getIO();
+    io.emit('contest:new', { contest });
+  } catch {}
+
   res.status(201).json({ contest });
 });
 
@@ -103,7 +110,20 @@ const registerForContest = asyncHandler(async (req, res) => {
   }
 
   const registration = await ContestRegistration.create({ contest: contest._id, user: req.user.id });
-  await Contest.findByIdAndUpdate(contest._id, { $inc: { registeredCount: 1 } });
+  const updated = await Contest.findByIdAndUpdate(
+    contest._id,
+    { $inc: { registeredCount: 1 } },
+    { new: true }
+  ).select('registeredCount');
+
+  // Broadcast updated participant count to all connected clients in real-time
+  try {
+    const io = getIO();
+    io.emit('contest:participantUpdate', {
+      contestId: String(contest._id),
+      registeredCount: updated.registeredCount,
+    });
+  } catch {}
 
   res.status(201).json({ registration });
 });
@@ -119,7 +139,7 @@ const contestLeaderboard = asyncHandler(async (req, res) => {
   const [registrations, total] = await Promise.all([
     ContestRegistration.find({ contest: contest._id })
       .populate('user', 'username avatar country rating')
-      .sort({ score: -1, penalty: 1, updatedAt: 1 })
+      .sort({ score: -1, penalty: 1, lastSolveAt: 1 })
       .skip(skip)
       .limit(limit),
     ContestRegistration.countDocuments({ contest: contest._id }),

@@ -22,6 +22,7 @@ import { Route as ContestsRouteImport } from './routes/contests'
 import { Route as AdminRouteImport } from './routes/admin'
 import { Route as IndexRouteImport } from './routes/index'
 import { Route as ContestsIndexRouteImport } from './routes/contests.index'
+import { Route as UsersUsernameRouteImport } from './routes/users.$username'
 import { Route as ProblemsSlugRouteImport } from './routes/problems.$slug'
 import { Route as DiscussIdRouteImport } from './routes/discuss.$id'
 import { Route as ContestsIdRouteImport } from './routes/contests.$id'
@@ -91,6 +92,11 @@ const ContestsIndexRoute = ContestsIndexRouteImport.update({
   path: '/',
   getParentRoute: () => ContestsRoute,
 } as any)
+const UsersUsernameRoute = UsersUsernameRouteImport.update({
+  id: '/users/$username',
+  path: '/users/$username',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const ProblemsSlugRoute = ProblemsSlugRouteImport.update({
   id: '/$slug',
   path: '/$slug',
@@ -123,6 +129,7 @@ export interface FileRoutesByFullPath {
   '/contests/$id': typeof ContestsIdRoute
   '/discuss/$id': typeof DiscussIdRoute
   '/problems/$slug': typeof ProblemsSlugRoute
+  '/users/$username': typeof UsersUsernameRoute
   '/contests/': typeof ContestsIndexRoute
 }
 export interface FileRoutesByTo {
@@ -140,6 +147,7 @@ export interface FileRoutesByTo {
   '/contests/$id': typeof ContestsIdRoute
   '/discuss/$id': typeof DiscussIdRoute
   '/problems/$slug': typeof ProblemsSlugRoute
+  '/users/$username': typeof UsersUsernameRoute
   '/contests': typeof ContestsIndexRoute
 }
 export interface FileRoutesById {
@@ -159,6 +167,7 @@ export interface FileRoutesById {
   '/contests/$id': typeof ContestsIdRoute
   '/discuss/$id': typeof DiscussIdRoute
   '/problems/$slug': typeof ProblemsSlugRoute
+  '/users/$username': typeof UsersUsernameRoute
   '/contests/': typeof ContestsIndexRoute
 }
 export interface FileRouteTypes {
@@ -179,6 +188,7 @@ export interface FileRouteTypes {
     | '/contests/$id'
     | '/discuss/$id'
     | '/problems/$slug'
+    | '/users/$username'
     | '/contests/'
   fileRoutesByTo: FileRoutesByTo
   to:
@@ -196,6 +206,7 @@ export interface FileRouteTypes {
     | '/contests/$id'
     | '/discuss/$id'
     | '/problems/$slug'
+    | '/users/$username'
     | '/contests'
   id:
     | '__root__'
@@ -214,6 +225,7 @@ export interface FileRouteTypes {
     | '/contests/$id'
     | '/discuss/$id'
     | '/problems/$slug'
+    | '/users/$username'
     | '/contests/'
   fileRoutesById: FileRoutesById
 }
@@ -230,6 +242,7 @@ export interface RootRouteChildren {
   RegisterRoute: typeof RegisterRoute
   SettingsRoute: typeof SettingsRoute
   SubmissionsRoute: typeof SubmissionsRoute
+  UsersUsernameRoute: typeof UsersUsernameRoute
 }
 
 declare module '@tanstack/react-router' {
@@ -325,6 +338,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof ContestsIndexRouteImport
       parentRoute: typeof ContestsRoute
     }
+    '/users/$username': {
+      id: '/users/$username'
+      path: '/users/$username'
+      fullPath: '/users/$username'
+      preLoaderRoute: typeof UsersUsernameRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/problems/$slug': {
       id: '/problems/$slug'
       path: '/$slug'
@@ -399,6 +419,7 @@ const rootRouteChildren: RootRouteChildren = {
   RegisterRoute: RegisterRoute,
   SettingsRoute: SettingsRoute,
   SubmissionsRoute: SubmissionsRoute,
+  UsersUsernameRoute: UsersUsernameRoute,
 }
 export const routeTree = rootRouteImport
   ._addFileChildren(rootRouteChildren)

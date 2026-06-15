@@ -1,9 +1,13 @@
 require('dotenv').config();
+const http = require('http');
 const express = require('express');
 const helmet = require('helmet');
 const cors = require('cors');
 const cookieParser = require('cookie-parser');
 const connectDB = require('./config/db');
+const { initSocketIO } = require('./socket');
+const { startSubmissionWatcher } = require('./socket/submissionWatcher');
+const { startContestWatcher } = require('./socket/contestWatcher');
 const authRoutes = require('./routes/auth');
 const contestRoutes = require('./routes/contests');
 const dashboardRoutes = require('./routes/dashboard');
@@ -26,6 +30,7 @@ dotenv.config();
 dns.setServers(["1.1.1.1", "8.8.8.8"]);
 
 const app = express();
+const server = http.createServer(app);
 const PORT = process.env.PORT || 5000;
 
 // Debug log incoming requests
@@ -103,7 +108,19 @@ app.use((err, req, res, next) => {
 
 // Connect DB and start server
 connectDB().then(() => {
-  app.listen(PORT, () => {
+  initSocketIO(server);
+
+  // Start MongoDB change stream watchers.
+  // These bridge the gap between the judge worker process (which writes to DB)
+  // and the Socket.IO server (which emits to clients).
+  startSubmissionWatcher().catch((err) =>
+    console.error('Failed to start submission watcher:', err)
+  );
+  startContestWatcher().catch((err) =>
+    console.error('Failed to start contest watcher:', err)
+  );
+
+  server.listen(PORT, () => {
     console.log(`Server running on port ${PORT}`);
   });
   if (process.env.JUDGE_WORKER_ENABLED === 'true') {

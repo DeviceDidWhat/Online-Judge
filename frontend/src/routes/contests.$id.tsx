@@ -2,7 +2,7 @@ import { createFileRoute, Link } from "@tanstack/react-router";
 import { useEffect, useRef, useState } from "react";
 import {
   ArrowLeft, CheckCircle2, ChevronRight, Clock, Code2,
-  Flame, Loader2, Lock, Send, Trophy, Users, XCircle, TrendingUp,
+  Flame, Loader2, Lock, RefreshCw, Send, Trophy, Users, XCircle, TrendingUp,
 } from "lucide-react";
 import { AppShell } from "@/components/app-shell";
 import { Card } from "@/components/ui/card";
@@ -18,9 +18,11 @@ import {
   type ApiSubmission,
 } from "@/lib/api";
 import { useAuth } from "@/lib/auth";
-
 import { toast } from "sonner";
 import { VerdictBadge } from "@/components/verdict-badge";
+import { useContestLeaderboard } from "@/hooks/use-contest-leaderboard";
+import { useSubmissionStatus } from "@/hooks/use-submission-status";
+import { getSocket } from "@/lib/socket";
 
 export const Route = createFileRoute("/contests/$id")({
   component: ContestDetail,
@@ -95,7 +97,7 @@ function ContestEditor({
   contestId: string;
   problems: ApiContest["problems"];
   languages: ApiLanguage[];
-  onSubmitted: () => void;
+  onSubmitted: (submission: ApiSubmission) => void;
 }) {
   const [label, setLabel] = useState(problems[0]?.label ?? "");
   // Initialize to undefined so the placeholder shows until languages load.
@@ -122,12 +124,12 @@ function ContestEditor({
     if (!lang) return toast.error("Select a language first");
     setSubmitting(true);
     try {
-      await apiRequest<{ submission: ApiSubmission }>(`/contests/${contestId}/submit`, {
+      const created = await apiRequest<{ submission: ApiSubmission }>(`/contests/${contestId}/submit`, {
         method: "POST",
         body: JSON.stringify({ problemLabel: label, language: lang, sourceCode: code }),
       });
       toast.success(`Submission queued for Problem ${label}`);
-      onSubmitted();
+      onSubmitted(created.submission);
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Submission failed");
     } finally {
@@ -215,12 +217,37 @@ function ContestDetail() {
   const [languages, setLanguages] = useState<ApiLanguage[]>(fallbackLanguages);
   const [loading, setLoading] = useState(true);
   const [registering, setRegistering] = useState(false);
+  const [refreshingLeaderboard, setRefreshingLeaderboard] = useState(false);
   const [tick, setTick] = useState(Date.now());
+  // Controlled tab — persists user's choice, auto-switches when contest goes live.
+  const [activeTab, setActiveTab] = useState("");
+  // Submission we're currently waiting for a verdict on (drives socket listener).
+  const [watchingSubmissionId, setWatchingSubmissionId] = useState<string | null>(null);
 
   useEffect(() => {
     const timer = setInterval(() => setTick(Date.now()), 1000);
     return () => clearInterval(timer);
   }, []);
+
+  // Instantly flip to live / ended when the client clock crosses the boundary,
+  // without waiting for the socket event (which may lag by a second or two).
+  const hasTriggeredLiveRef = useRef(false);
+  const hasTriggeredEndedRef = useRef(false);
+  useEffect(() => {
+    if (!contest) return;
+    const startsAtMs = new Date(contest.startsAt).getTime();
+    const endMs = startsAtMs + contest.duration * 60000;
+
+    if (!hasTriggeredLiveRef.current && contest.status === "upcoming" && tick >= startsAtMs) {
+      hasTriggeredLiveRef.current = true;
+      setContest((c) => (c ? { ...c, status: "live" } : c));
+    }
+
+    if (!hasTriggeredEndedRef.current && contest.status === "live" && tick >= endMs) {
+      hasTriggeredEndedRef.current = true;
+      setContest((c) => (c ? { ...c, status: "ended" } : c));
+    }
+  }, [tick]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const loadData = async (silent = false) => {
     if (!silent) setLoading(true);
@@ -246,23 +273,113 @@ function ContestDetail() {
     }
   };
 
+  const refreshLeaderboard = async () => {
+    setRefreshingLeaderboard(true);
+    try {
+      const data = await apiRequest<{ leaderboard: ApiContestRegistration[] }>(`/contests/${id}/leaderboard`);
+      setLeaderboard(data.leaderboard);
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Failed to refresh standings");
+    } finally {
+      setRefreshingLeaderboard(false);
+    }
+  };
+
   useEffect(() => {
-    // Wait until auth has resolved before loading so we can fetch
-    // the registration in a single request (avoids the flash where
-    // user is null and the button briefly shows "Login to register").
     if (authLoading) return;
     let cancelled = false;
     loadData();
-    // Poll leaderboard every 15s while live
+    // Poll every 60s as a lightweight fallback for anything the socket misses.
+    // Primary updates (leaderboard, status) come via WebSocket below.
     const pollId = setInterval(() => {
       if (!cancelled) loadData(true);
-    }, 15000);
+    }, 60000);
     return () => {
       cancelled = true;
       clearInterval(pollId);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [id, user, authLoading]);
+
+  // ── WebSocket: real-time leaderboard updates (via submission change stream) ──
+  // id is available immediately from route params — don't wait for contest to load.
+  useContestLeaderboard(
+    id,
+    (freshLeaderboard) => setLeaderboard(freshLeaderboard),
+  );
+
+  // ── WebSocket: real-time verdict for the user's contest submission ─────────
+  // When the judge finishes, update the My Submissions list without a refresh.
+  useSubmissionStatus(watchingSubmissionId, (payload) => {
+    setWatchingSubmissionId(null);
+
+    const updated = payload as ApiSubmission;
+
+    // Merge verdict into the optimistic Pending entry added on submit.
+    setMySubmissions((current) => {
+      const exists = current.some((s) => s.submissionId === updated.submissionId);
+      if (exists) {
+        return current.map((s) =>
+          s.submissionId === updated.submissionId ? { ...s, ...updated } : s
+        );
+      }
+      return [updated, ...current];
+    });
+
+    // Reload once the judge is done — DB is guaranteed to have the final
+    // verdict at this point, so there's no race with the optimistic entry.
+    loadData(true);
+
+    if (updated.verdict === "Accepted") {
+      toast.success("Accepted! Your solution passed all test cases.");
+    } else if (updated.verdict && updated.verdict !== "Pending") {
+      toast.error(`Verdict: ${updated.verdict}`);
+    }
+  });
+
+  // ── Auto-switch tab when contest status changes ────────────────────────────
+  // When the contest first loads (or transitions upcoming→live→ended), pick
+  // the right default tab.  If the user has already navigated to a different
+  // tab we leave it alone — except when coming off "info" (upcoming-only tab).
+  useEffect(() => {
+    if (!contest) return;
+    setActiveTab((prev) => {
+      const isLive = contest.status === 'live';
+      const isUpcoming = contest.status === 'upcoming';
+      const canSub = isLive && Boolean(registration) && Boolean(user);
+      const ideal = isUpcoming ? 'info' : (canSub ? 'arena' : 'problems');
+      if (!prev) return ideal;                         // first load
+      if (prev === 'info' && !isUpcoming) return ideal; // contest went live
+      return prev;                                     // keep user's choice
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [contest?.status, !!registration, !!user]);
+
+  // ── WebSocket: real-time contest status transitions & finalization ─────────
+  useEffect(() => {
+    const socket = getSocket();
+    if (!socket.connected) socket.connect();
+
+    const handleStatusChange = (payload: { contestId: string; status: string; ratingProcessed?: boolean }) => {
+      if (payload.contestId !== id) return;
+      // Reload full contest data so status, tabs, ratings, and UI update correctly.
+      loadData(true);
+    };
+
+    // Real-time participant count: fires whenever any user registers
+    const handleParticipantUpdate = (payload: { contestId: string; registeredCount: number }) => {
+      if (payload.contestId !== id) return;
+      setContest((c) => (c ? { ...c, registeredCount: payload.registeredCount } : c));
+    };
+
+    socket.on('contest:statusChange', handleStatusChange);
+    socket.on('contest:participantUpdate', handleParticipantUpdate);
+    return () => {
+      socket.off('contest:statusChange', handleStatusChange);
+      socket.off('contest:participantUpdate', handleParticipantUpdate);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [id]);
 
   const register = async () => {
     setRegistering(true);
@@ -396,7 +513,7 @@ function ContestDetail() {
         </Card>
 
         {/* Tabs — problems/standings only visible once contest is live or ended */}
-        <Tabs defaultValue={isUpcoming ? "info" : (isLive && canSubmit ? "arena" : "problems")} className="space-y-4">
+        <Tabs value={activeTab || (isUpcoming ? "info" : "problems")} onValueChange={setActiveTab} className="space-y-4">
           <TabsList className="flex-wrap h-auto gap-1 p-1">
             {isUpcoming && (
               <TabsTrigger value="info" className="gap-1.5">
@@ -494,7 +611,17 @@ function ContestDetail() {
                 contestId={id}
                 problems={contest.problems}
                 languages={languages}
-                onSubmitted={() => loadData(true)}
+                onSubmitted={(submission) => {
+                  // Optimistically add the Pending entry — no loadData() here.
+                  // loadData() after this point would race with the socket verdict
+                  // and could overwrite "Accepted" back to "Pending" if the judge
+                  // is faster than the HTTP round-trip.
+                  setMySubmissions((current) => [
+                    submission,
+                    ...current.filter((s) => s.submissionId !== submission.submissionId),
+                  ]);
+                  setWatchingSubmissionId(submission.submissionId);
+                }}
               />
             </TabsContent>
           )}
@@ -502,6 +629,21 @@ function ContestDetail() {
           {/* ── Standings tab (live / ended only) ── */}
           {!isUpcoming && <TabsContent value="standings">
             <Card className="overflow-hidden border-border/60">
+              <div className="flex items-center justify-between px-4 py-2 border-b border-border/60">
+                <span className="text-xs text-muted-foreground">
+                  {leaderboard.length} participant{leaderboard.length !== 1 ? "s" : ""}
+                </span>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="h-7 gap-1.5 text-xs"
+                  onClick={refreshLeaderboard}
+                  disabled={refreshingLeaderboard}
+                >
+                  <RefreshCw className={`h-3 w-3 ${refreshingLeaderboard ? "animate-spin" : ""}`} />
+                  {refreshingLeaderboard ? "Refreshing…" : "Refresh"}
+                </Button>
+              </div>
               <div className="overflow-x-auto">
                 <table className="w-full text-sm">
                   <thead className="bg-secondary/40 text-left text-xs uppercase tracking-wide text-muted-foreground">

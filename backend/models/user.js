@@ -9,7 +9,7 @@ const userSchema = new Schema({
   password: { type: String, required: true },
   role: { type: String, enum: ['user', 'admin'], default: 'user' },
   avatar: { type: String, trim: true },
-  country: { type: String, trim: true, uppercase: true, maxlength: 2 },
+  country: { type: String, trim: true },
   rating: { type: Number, default: 1200, min: 0 },
   rank: { type: Number, min: 1 },
   solved: {
@@ -26,6 +26,7 @@ const userSchema = new Schema({
     editorFontSize: { type: Number, default: 14, min: 10, max: 32 },
     theme: { type: String, enum: ['dark', 'light', 'system'], default: 'system' },
   },
+  isPrivate: { type: Boolean, default: false },
   refreshTokens: [{ token: String, createdAt: { type: Date, default: Date.now } }]
 }, { timestamps: true });
 

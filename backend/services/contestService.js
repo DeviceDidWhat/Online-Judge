@@ -17,6 +17,7 @@ const Contest = require('../models/contest');
 const ContestRegistration = require('../models/contestRegistration');
 const RatingHistory = require('../models/ratingHistory');
 const User = require('../models/user');
+const { getIO } = require('../socket');
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Scoring
@@ -32,60 +33,102 @@ const User = require('../models/user');
  * @param {string|ObjectId} problemId
  * @param {object} submission  — the just-judged Submission document
  */
-const updateContestScore = async (contestId, userId, problemId, submission) => {
-  try {
-    const contest = await Contest.findById(contestId).select('startsAt status problems');
-    if (!contest || contest.status === 'ended') return;
+const WRONG_VERDICTS = ['Wrong Answer', 'TLE', 'MLE', 'Runtime Error', 'Compilation Error'];
 
-    const registration = await ContestRegistration.findOne({ contest: contestId, user: userId });
-    if (!registration) return;
+const updateContestScore = async (contestId, userId, problemId) => {
+  const Submission = require('../models/submission');
 
-    const alreadySolved = registration.solvedProblems.some(
-      (sp) => sp.problem.toString() === problemId.toString()
-    );
+  // Recompute is read-modify-write, so retry on a concurrent modification
+  // (two submissions for the same user judged at the same time).
+  for (let attempt = 0; attempt < 3; attempt++) {
+    try {
+      const contest = await Contest.findById(contestId).select('startsAt duration status problems ratingProcessed');
+      if (!contest) return;
+      // Once ratings are computed the standings are locked — don't keep mutating them.
+      // We intentionally do NOT bail on status === 'ended': a submission made in the
+      // final seconds (while live) may only finish judging after the contest flips to
+      // ended, and it must still be scored.
+      if (contest.ratingProcessed) return;
 
-    const isAccepted = submission.verdict === 'Accepted';
-    const isWrong = !isAccepted && submission.verdict !== 'Pending';
+      const registration = await ContestRegistration.findOne({ contest: contestId, user: userId });
+      if (!registration) return;
 
-    if (isAccepted && !alreadySolved) {
-      // Minutes from contest start to this submission
-      const contestStartMs = new Date(contest.startsAt).getTime();
-      const submittedMs = new Date(submission.submittedAt || Date.now()).getTime();
-      const minutesFromStart = Math.max(0, Math.floor((submittedMs - contestStartMs) / 60000));
-
-      // Count wrong attempts for this problem in this contest (before this AC)
-      const wrongAttempts = registration.solvedProblems
-        .filter((sp) => sp.problem.toString() === problemId.toString())
-        .reduce((acc) => acc, 0); // placeholder — we track separately below
-
-      // Actually count wrong attempts from submissions
-      const Submission = require('../models/submission');
-      const prevWrong = await Submission.countDocuments({
+      // ── Recompute this problem's contribution from submission TIMES ───────────
+      // We deliberately ignore the order in which submissions were judged and derive
+      // the official result purely from `submittedAt`. This converges to the correct
+      // ICPC result no matter what order the judge finishes submissions in.
+      // Only judged (non-Pending) submissions made WITHIN the contest window count.
+      const contestEndMs = new Date(contest.startsAt).getTime() + contest.duration * 60 * 1000;
+      const attempts = await Submission.find({
         contest: contestId,
         user: userId,
         problem: problemId,
-        verdict: { $in: ['Wrong Answer', 'TLE', 'MLE', 'Runtime Error', 'Compilation Error'] },
-      });
+        verdict: { $ne: 'Pending' },
+        submittedAt: { $lte: new Date(contestEndMs) },
+      }).select('verdict submittedAt').sort({ submittedAt: 1 });
 
-      const timePenaltyMinutes = minutesFromStart + 20 * prevWrong;
+      // The official solve is the EARLIEST accepted submission by submission time.
+      const firstAccepted = attempts.find((s) => s.verdict === 'Accepted');
 
-      await ContestRegistration.findByIdAndUpdate(registration._id, {
-        $inc: { score: 1, penalty: timePenaltyMinutes },
-        $push: {
-          solvedProblems: {
-            problem: problemId,
-            submission: submission._id,
-            solvedAt: submission.submittedAt || new Date(),
-            points: 1,
-            wrongAttempts: prevWrong,
-            timePenaltyMinutes,
-          },
-        },
-      });
+      const existingIdx = registration.solvedProblems.findIndex(
+        (sp) => sp.problem.toString() === problemId.toString()
+      );
+
+      // Wrong attempts in ICPC count only non-accepted submissions made BEFORE the AC.
+      if (firstAccepted) {
+        const acMs = new Date(firstAccepted.submittedAt).getTime();
+        const wrongAttempts = attempts.filter(
+          (s) => WRONG_VERDICTS.includes(s.verdict)
+            && new Date(s.submittedAt).getTime() < acMs
+        ).length;
+
+        const contestStartMs = new Date(contest.startsAt).getTime();
+        const minutesFromStart = Math.max(0, Math.floor((acMs - contestStartMs) / 60000));
+        const timePenaltyMinutes = minutesFromStart + 20 * wrongAttempts;
+
+        const solvedEntry = {
+          problem: problemId,
+          submission: firstAccepted._id,
+          solvedAt: firstAccepted.submittedAt,
+          points: 1,
+          wrongAttempts,
+          timePenaltyMinutes,
+        };
+
+        if (existingIdx === -1) {
+          registration.solvedProblems.push(solvedEntry);
+        } else {
+          // Replace — corrects an earlier value computed from out-of-order judging.
+          registration.solvedProblems[existingIdx] = solvedEntry;
+        }
+      } else if (existingIdx !== -1) {
+        // No AC among judged submissions, yet we have a stale solve entry
+        // (e.g. an AC was rejudged to a wrong verdict). Remove it.
+        registration.solvedProblems.splice(existingIdx, 1);
+      } else {
+        // Still unsolved — wrong attempts alone never change score/penalty in ICPC.
+        return;
+      }
+
+      // ── Recompute aggregates from solvedProblems (single source of truth) ──────
+      registration.score = registration.solvedProblems.length;
+      registration.penalty = registration.solvedProblems.reduce(
+        (sum, sp) => sum + (sp.timePenaltyMinutes || 0), 0
+      );
+      // Tiebreak key: time of the LATEST solve (derived from submittedAt).
+      registration.lastSolveAt = registration.solvedProblems.reduce((latest, sp) => {
+        const t = new Date(sp.solvedAt).getTime();
+        return t > latest ? t : latest;
+      }, 0) || undefined;
+
+      await registration.save();
+      return;
+    } catch (err) {
+      // VersionError → another judge updated this registration; re-read and retry.
+      if (err.name === 'VersionError' && attempt < 2) continue;
+      console.error('[contestService] updateContestScore error:', err);
+      return;
     }
-    // Wrong submissions don't immediately change score/penalty (penalty is added at solve time)
-  } catch (err) {
-    console.error('[contestService] updateContestScore error:', err);
   }
 };
 
@@ -95,14 +138,16 @@ const updateContestScore = async (contestId, userId, problemId, submission) => {
 
 /**
  * Assigns rank numbers to all registrations for a contest.
- * Sort order: score DESC, penalty ASC, last-solve-time ASC (updatedAt as proxy).
+ * Sort order: score DESC, penalty ASC, last-solve-time ASC.
+ * Tiebreak uses lastSolveAt (derived from submittedAt), so it is independent of the
+ * order submissions were judged in. Falls back to 0 for registrations with no solves.
  * Returns the sorted registrations with ranks applied (not saved yet).
  */
 const rankRegistrations = (registrations) => {
   const sorted = [...registrations].sort((a, b) => {
     if (b.score !== a.score) return b.score - a.score;
     if (a.penalty !== b.penalty) return a.penalty - b.penalty;
-    return new Date(a.updatedAt) - new Date(b.updatedAt);
+    return new Date(a.lastSolveAt || 0) - new Date(b.lastSolveAt || 0);
   });
 
   let rank = 1;
@@ -236,13 +281,36 @@ const finalizeContest = async (contestId) => {
     return false;
   }
 
+  const Submission = require('../models/submission');
+
+  // ── Fix A: don't finalize while in-window submissions are still being judged ──
+  // A last-second submission may still be Pending when the contest flips to ended.
+  // Finalizing now would lock standings before that verdict is scored. Defer instead;
+  // transitionContestStatuses re-attempts finalize on a later tick once judging settles.
+  const pendingCount = await Submission.countDocuments({ contest: contestId, verdict: 'Pending' });
+  if (pendingCount > 0) {
+    console.log(`[contestService] finalizeContest: ${pendingCount} submission(s) still judging for "${contest.name}" — deferring.`);
+    return false;
+  }
+
   console.log(`[contestService] Finalizing contest: ${contest.name}`);
 
-  const registrations = await ContestRegistration.find({ contest: contestId }).populate('user', 'rating username');
+  const allRegistrations = await ContestRegistration.find({ contest: contestId }).populate('user', 'rating username');
+
+  // ── Fix B: only rate users who actually participated (made ≥1 submission) ──────
+  // Registering and never submitting should not change your rating.
+  const submittedUserIds = await Submission.distinct('user', { contest: contestId });
+  const participatedSet = new Set(submittedUserIds.map(String));
+  const registrations = allRegistrations.filter((reg) => participatedSet.has(String(reg.user._id)));
 
   if (registrations.length === 0) {
-    // No participants — just mark as processed
     await Contest.findByIdAndUpdate(contestId, { ratingProcessed: true });
+    try {
+      const io = getIO();
+      const payload = { contestId: String(contestId), status: 'ended', ratingProcessed: true };
+      io.to(`contest:${contestId}`).emit('contest:statusChange', payload);
+      io.emit('contest:statusChange', payload);
+    } catch {}
     return true;
   }
 
@@ -292,6 +360,21 @@ const finalizeContest = async (contestId) => {
   // Step 5: Mark processed
   await Contest.findByIdAndUpdate(contestId, { ratingProcessed: true });
 
+  // Notify all clients that rating processing is complete so they reload
+  // without a manual refresh. This is a second event after the ended transition.
+  try {
+    const io = getIO();
+    const payload = {
+      contestId: String(contestId),
+      status: 'ended',
+      ratingProcessed: true,
+      startsAt: contest.startsAt,
+      duration: contest.duration,
+    };
+    io.to(`contest:${contestId}`).emit('contest:statusChange', payload);
+    io.emit('contest:statusChange', payload);
+  } catch {}
+
   console.log(`[contestService] Contest "${contest.name}" finalized. ${results.length} ratings updated.`);
   return true;
 };
@@ -308,17 +391,42 @@ const finalizeContest = async (contestId) => {
  * Then finalizes any newly ended contests that haven't been processed.
  * Called on every judge worker tick (~1.5s interval).
  */
+const emitStatusChange = (contest, status) => {
+  try {
+    const io = getIO();
+    const payload = {
+      contestId: String(contest._id),
+      status,
+      startsAt: contest.startsAt,
+      duration: contest.duration,
+    };
+    // Notify both room members and ALL connected clients (lists page, etc.)
+    io.to(`contest:${contest._id}`).emit('contest:statusChange', payload);
+    io.emit('contest:statusChange', payload);
+  } catch {
+    // Socket not initialised (separate worker process) — contestWatcher handles it via change stream.
+  }
+};
+
 const transitionContestStatuses = async () => {
   const now = new Date();
 
   try {
-    // Transition upcoming → live
-    await Contest.updateMany(
-      { status: 'upcoming', startsAt: { $lte: now } },
-      { $set: { status: 'live' } }
-    );
+    // ── upcoming → live ───────────────────────────────────────────────────────
+    // Fetch BEFORE updating so we have the documents to emit events for.
+    const toGoLive = await Contest.find({ status: 'upcoming', startsAt: { $lte: now } });
+    if (toGoLive.length > 0) {
+      await Contest.updateMany(
+        { status: 'upcoming', startsAt: { $lte: now } },
+        { $set: { status: 'live' } }
+      );
+      for (const c of toGoLive) {
+        console.log(`[contestService] Contest "${c.name}" → live`);
+        emitStatusChange(c, 'live');
+      }
+    }
 
-    // Find live contests whose end time has passed
+    // ── live → ended ──────────────────────────────────────────────────────────
     const liveContests = await Contest.find({ status: 'live' });
     const toEnd = liveContests.filter((c) => {
       const endTime = new Date(c.startsAt).getTime() + c.duration * 60 * 1000;
@@ -327,7 +435,16 @@ const transitionContestStatuses = async () => {
 
     for (const contest of toEnd) {
       await Contest.findByIdAndUpdate(contest._id, { status: 'ended' });
-      // Finalize asynchronously (non-blocking for the worker tick)
+      console.log(`[contestService] Contest "${contest.name}" → ended`);
+      emitStatusChange(contest, 'ended');
+    }
+
+    // ── finalize ended-but-unprocessed contests ─────────────────────────────────
+    // Covers contests that just ended above AND any whose finalize was deferred
+    // (Fix A) because last-second submissions were still being judged. finalizeContest
+    // is idempotent and self-defers, so re-attempting every tick is safe.
+    const toFinalize = await Contest.find({ status: 'ended', ratingProcessed: false });
+    for (const contest of toFinalize) {
       finalizeContest(contest._id).catch((err) =>
         console.error(`[contestService] Error finalizing contest ${contest._id}:`, err)
       );
