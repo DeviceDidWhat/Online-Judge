@@ -30,6 +30,7 @@ const problemSchema = new Schema({
   acceptance: { type: Number, default: 0, min: 0, max: 100 },
   premium: { type: Boolean, default: false },
   status: { type: String, enum: ['draft', 'published', 'archived'], default: 'draft' },
+  visibility: { type: String, enum: ['public', 'contest_only'], default: 'public' },
   description: { type: String, required: true },
   constraints: [{ type: String, trim: true }],
   examples: [exampleSchema],

@@ -121,6 +121,7 @@ export type ApiUser = {
 
 export type ApiDifficulty = "Easy" | "Medium" | "Hard";
 export type ApiProblemStatus = "draft" | "published" | "archived";
+export type ApiProblemVisibility = "public" | "contest_only";
 
 export type ApiProblem = {
   _id: string;
@@ -132,6 +133,7 @@ export type ApiProblem = {
   acceptance: number;
   premium?: boolean;
   status: ApiProblemStatus;
+  visibility?: ApiProblemVisibility;
   description: string;
   constraints: string[];
   examples: Array<{ input: string; output: string; explanation?: string }>;

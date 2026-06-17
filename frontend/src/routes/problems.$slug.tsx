@@ -349,7 +349,7 @@ function ProblemDetail() {
       });
 
       const latest = created.submission;
-      setOutput(`Submission ${latest.submissionId} queued. Waiting for judge...`);
+      setOutput("Queued. Waiting for judge...");
 
       // Start watching for the socket push. The useSubmissionStatus hook will
       // handle the result and clear submitting state when the verdict arrives.
@@ -435,7 +435,6 @@ function ProblemDetail() {
                   <div key={submission.submissionId} className="rounded-lg border border-border/60 bg-card/40 p-3">
                     <div className="flex items-center justify-between">
                       <VerdictBadge verdict={submission.verdict} />
-                      <span className="text-[10px] text-muted-foreground font-mono">#{submission.submissionId}</span>
                     </div>
                     <div className="mt-2 grid grid-cols-3 gap-2 text-xs">
                       <div><div className="text-muted-foreground">Lang</div><div className="font-mono">{formatLanguage(languages, submission.language)}</div></div>
@@ -667,7 +666,7 @@ function ProblemDetail() {
               {verdict && <VerdictBadge verdict={verdict} />}
               <span>Submission Result</span>
             </DialogTitle>
-            <DialogDescription>{resultSubmission?.submissionId}</DialogDescription>
+            <DialogDescription>{resultSubmission?.submittedAt ? new Date(resultSubmission.submittedAt).toLocaleString() : ""}</DialogDescription>
           </DialogHeader>
           <pre className="max-h-80 overflow-auto rounded-md bg-secondary/60 p-3 font-mono text-xs whitespace-pre-wrap">
             {resultSubmission ? resultText(resultSubmission) : ""}

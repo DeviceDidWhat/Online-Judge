@@ -61,12 +61,11 @@ function Submissions() {
         <Card className="overflow-hidden border-border/60">
           <table className="w-full text-sm">
             <thead className="bg-secondary/40 text-left text-xs uppercase tracking-wide text-muted-foreground">
-              <tr><th className="px-4 py-3">ID</th><th className="px-4 py-3">Problem</th><th className="px-4 py-3">Verdict</th><th className="px-4 py-3">Language</th><th className="px-4 py-3">Runtime</th><th className="px-4 py-3">Memory</th><th className="px-4 py-3">When</th></tr>
+              <tr><th className="px-4 py-3">Problem</th><th className="px-4 py-3">Verdict</th><th className="px-4 py-3">Language</th><th className="px-4 py-3">Runtime</th><th className="px-4 py-3">Memory</th><th className="px-4 py-3">When</th></tr>
             </thead>
             <tbody>
               {filtered.map((s) => (
                 <tr key={s.submissionId} className="border-t border-border/60 hover:bg-accent/30">
-                  <td className="px-4 py-3 font-mono text-xs text-muted-foreground">{s.submissionId}</td>
                   <td className="px-4 py-3 font-medium">{s.problemTitle}</td>
                   <td className="px-4 py-3"><VerdictBadge verdict={s.verdict} /></td>
                   <td className="px-4 py-3 text-muted-foreground">{s.language}</td>

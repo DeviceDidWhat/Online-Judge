@@ -100,7 +100,7 @@ function Leaderboard() {
         <Card className="overflow-hidden border-border/60">
           <table className="w-full text-sm">
             <thead className="bg-secondary/40 text-left text-xs uppercase tracking-wide text-muted-foreground">
-              <tr><th className="px-4 py-3">Rank</th><th className="px-4 py-3">User</th><th className="px-4 py-3">Country</th><th className="px-4 py-3">Rating</th><th className="px-4 py-3">Solved</th><th className="px-4 py-3">Streak</th></tr>
+              <tr><th className="px-4 py-3">Rank</th><th className="px-4 py-3">User</th><th className="px-4 py-3">Country</th><th className="px-4 py-3">Rating</th><th className="px-4 py-3">Solved</th></tr>
             </thead>
             <tbody>
               {rest.map((user) => (
@@ -119,11 +119,10 @@ function Leaderboard() {
                   <td className="px-4 py-3 text-muted-foreground">{user.country ?? "-"}</td>
                   <td className="px-4 py-3 font-bold gradient-text">{user.rating ?? 0}</td>
                   <td className="px-4 py-3">{user.solved?.total ?? 0}</td>
-                  <td className="px-4 py-3">{user.streak ?? 0}d</td>
                 </tr>
               ))}
               {!loading && ranked.length === 0 && (
-                <tr><td colSpan={6} className="px-4 py-8 text-center text-muted-foreground">No users found.</td></tr>
+                <tr><td colSpan={5} className="px-4 py-8 text-center text-muted-foreground">No users found.</td></tr>
               )}
             </tbody>
           </table>

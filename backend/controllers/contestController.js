@@ -18,11 +18,19 @@ const contestLookup = (id) => {
 
 // ─── List / Get / CRUD ───────────────────────────────────────────────────────
 
+const stripSlugFromProblem = (p) => {
+  if (!p.problem) return p;
+  const { slug: _slug, ...rest } = p.problem;
+  return { ...p, problem: rest };
+};
+
 const listContests = asyncHandler(async (req, res) => {
   const { page, limit, skip } = parsePagination(req.query, { limit: 20 });
   const filter = {};
   if (req.query.status) filter.status = req.query.status;
   if (req.query.q) filter.name = new RegExp(escapeRegExp(req.query.q), 'i');
+
+  const isAdmin = req.user?.role === 'admin';
 
   const [contests, total] = await Promise.all([
     Contest.find(filter)
@@ -33,7 +41,15 @@ const listContests = asyncHandler(async (req, res) => {
     Contest.countDocuments(filter),
   ]);
 
-  res.json({ contests, pagination: { page, limit, total, pages: Math.ceil(total / limit) } });
+  // Hide problem slugs in upcoming contests so users can't extract them before the contest starts
+  const result = isAdmin ? contests : contests.map((contest) => {
+    if (contest.status !== 'upcoming') return contest;
+    const obj = contest.toObject();
+    obj.problems = obj.problems.map(stripSlugFromProblem);
+    return obj;
+  });
+
+  res.json({ contests: result, pagination: { page, limit, total, pages: Math.ceil(total / limit) } });
 });
 
 const getContest = asyncHandler(async (req, res) => {
@@ -44,6 +60,13 @@ const getContest = asyncHandler(async (req, res) => {
   const registration = req.user
     ? await ContestRegistration.findOne({ contest: contest._id, user: req.user.id })
     : null;
+
+  const isAdmin = req.user?.role === 'admin';
+  if (contest.status === 'upcoming' && !isAdmin) {
+    const obj = contest.toObject();
+    obj.problems = obj.problems.map(stripSlugFromProblem);
+    return res.json({ contest: obj, registration });
+  }
 
   res.json({ contest, registration });
 });

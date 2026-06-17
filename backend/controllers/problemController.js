@@ -1,6 +1,11 @@
 const Problem = require('../models/problem');
+const Contest = require('../models/contest');
 const UserProblemProgress = require('../models/userProblemProgress');
 const { asyncHandler, parsePagination, escapeRegExp } = require('../utils/controller');
+
+// Returns true if the problem is accessible in a live or ended contest
+const isAccessibleViaContest = (problemId) =>
+  Contest.exists({ 'problems.problem': problemId, status: { $in: ['live', 'ended'] } });
 
 const publicProblemSelect = '-testCases -editorial';
 
@@ -40,6 +45,9 @@ const listProblems = asyncHandler(async (req, res) => {
   } else if (req.user?.role !== 'admin') {
     filter.status = 'published';
   }
+  if (req.user?.role !== 'admin') {
+    filter.visibility = { $ne: 'contest_only' };
+  }
   if (req.query.difficulty) filter.difficulty = req.query.difficulty;
   if (req.query.tag) filter.tags = req.query.tag;
   if (req.query.q) {
@@ -60,11 +68,16 @@ const listProblems = asyncHandler(async (req, res) => {
 });
 
 const getProblem = asyncHandler(async (req, res) => {
-  const select = req.user?.role === 'admin' ? '' : publicProblemSelect;
+  const isAdmin = req.user?.role === 'admin';
+  const select = isAdmin ? '' : publicProblemSelect;
   const problem = await Problem.findOne({ slug: req.params.slug }).select(select);
   if (!problem) return res.status(404).json({ message: 'Problem not found' });
-  if (problem.status !== 'published' && req.user?.role !== 'admin') {
+  if (problem.status !== 'published' && !isAdmin) {
     return res.status(404).json({ message: 'Problem not found' });
+  }
+  if (problem.visibility === 'contest_only' && !isAdmin) {
+    const accessible = await isAccessibleViaContest(problem._id);
+    if (!accessible) return res.status(404).json({ message: 'Problem not found' });
   }
 
   const [payload] = await addUserProgress([problem], req.user?.id);
@@ -150,8 +163,15 @@ const runCustom = asyncHandler(async (req, res) => {
   const { language, sourceCode, input = '' } = req.body;
   if (!language || !sourceCode) return res.status(400).json({ message: 'Language and sourceCode are required' });
 
-  const problem = await Problem.findOne({ slug: req.params.slug }).select('timeLimitMs memoryLimitMb');
+  const problem = await Problem.findOne({ slug: req.params.slug }).select('timeLimitMs memoryLimitMb visibility status');
   if (!problem) return res.status(404).json({ message: 'Problem not found' });
+  if (problem.status !== 'published' && req.user?.role !== 'admin') {
+    return res.status(404).json({ message: 'Problem not found' });
+  }
+  if (problem.visibility === 'contest_only' && req.user?.role !== 'admin') {
+    const accessible = await isAccessibleViaContest(problem._id);
+    if (!accessible) return res.status(404).json({ message: 'Problem not found' });
+  }
 
   const judgeRunner = require('../services/judgeRunner');
   const result = await judgeRunner.runCode({

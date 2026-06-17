@@ -1,6 +1,6 @@
 import { createFileRoute, Link, Outlet, useNavigate, useRouterState } from "@tanstack/react-router";
 import { useEffect, useMemo, useState } from "react";
-import { Check, Filter, Lock, Search, Sparkles } from "lucide-react";
+import { Check, Filter, Lock, Search } from "lucide-react";
 import { AppShell } from "@/components/app-shell";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
@@ -70,7 +70,6 @@ function Problems() {
             <h1 className="text-2xl font-bold">Problemset</h1>
             <p className="text-sm text-muted-foreground">{loading ? "Loading problems..." : `${problems.length} published problems`}</p>
           </div>
-          <Button variant="outline" className="hidden md:inline-flex"><Sparkles className="mr-2 h-4 w-4" />Daily problem</Button>
         </div>
 
         <div className="mb-6 grid grid-cols-2 gap-3 md:grid-cols-4">

@@ -3,8 +3,9 @@ import {
   BarChart3, BookOpen, FileCode2, Home, LayoutDashboard,
   MessagesSquare, Settings, ShieldCheck, Trophy, User,
 } from "lucide-react";
+import { useAuth } from "@/lib/auth";
 
-const items = [
+const navItems = [
   { to: "/dashboard", label: "Dashboard", icon: LayoutDashboard },
   { to: "/problems", label: "Problems", icon: FileCode2 },
   { to: "/contests", label: "Contests", icon: Trophy },
@@ -12,14 +13,18 @@ const items = [
   { to: "/discuss", label: "Discuss", icon: MessagesSquare },
   { to: "/submissions", label: "Submissions", icon: BookOpen },
 ];
-const account = [
+
+const accountItems = [
   { to: "/profile", label: "Profile", icon: User },
   { to: "/settings", label: "Settings", icon: Settings },
-  { to: "/admin", label: "Admin", icon: ShieldCheck },
 ];
+
+const adminItem = { to: "/admin", label: "Admin", icon: ShieldCheck };
 
 export function Sidebar() {
   const path = useRouterState({ select: (s) => s.location.pathname });
+  const { user } = useAuth();
+
   const Item = ({ to, label, icon: Icon }: { to: string; label: string; icon: any }) => {
     const active = path === to || path.startsWith(to + "/");
     return (
@@ -36,6 +41,7 @@ export function Sidebar() {
       </Link>
     );
   };
+
   return (
     <aside className="sticky top-14 hidden h-[calc(100vh-3.5rem)] w-60 shrink-0 border-r border-border/60 bg-sidebar/40 backdrop-blur md:block">
       <nav className="flex h-full flex-col gap-1 p-4">
@@ -43,10 +49,11 @@ export function Sidebar() {
           <Home className="h-4 w-4" /> Home
         </Link>
         <div className="px-3 pb-1 pt-3 text-xs font-medium uppercase tracking-wider text-muted-foreground">Workspace</div>
-        {items.map((i) => <Item key={i.to} {...i} />)}
+        {navItems.map((i) => <Item key={i.to} {...i} />)}
         <div className="px-3 pb-1 pt-5 text-xs font-medium uppercase tracking-wider text-muted-foreground">Account</div>
-        {account.map((i) => <Item key={i.to} {...i} />)}
-        <div className="mt-auto rounded-xl border border-border/60 bg-gradient-to-br from-primary/15 to-transparent p-4">
+        {accountItems.map((i) => <Item key={i.to} {...i} />)}
+        {user?.role === "admin" && <Item {...adminItem} />}
+        <div className="mt-auto rounded-xl border border-border/60 bg-linear-to-br from-primary/15 to-transparent p-4">
           <div className="text-sm font-semibold">Upgrade to Pro</div>
           <p className="mt-1 text-xs text-muted-foreground">Unlock premium problems and contest analytics.</p>
         </div>

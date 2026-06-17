@@ -1,7 +1,7 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { useEffect, useMemo, useState } from "react";
 import { Area, AreaChart, CartesianGrid, Cell, Pie, PieChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
-import { Flame, Target, TrendingUp, Trophy } from "lucide-react";
+import { Target, TrendingUp, Trophy } from "lucide-react";
 import { AppShell } from "@/components/app-shell";
 import { Card } from "@/components/ui/card";
 import { Heatmap } from "@/components/heatmap";
@@ -66,7 +66,6 @@ function Dashboard() {
   const stats = [
     { label: "Current rating", value: user?.rating ?? 0, icon: TrendingUp, hint: "from profile", color: "text-success" },
     { label: "Solved", value: user?.solved?.total ?? 0, icon: Target, hint: "total accepted problems", color: "text-info" },
-    { label: "Streak", value: `${user?.streak ?? 0}d`, icon: Flame, hint: "current activity streak", color: "text-warning" },
     { label: "Global rank", value: user?.rank ? `#${user.rank}` : "-", icon: Trophy, hint: "leaderboard position", color: "gradient-text" },
   ];
 
@@ -78,7 +77,7 @@ function Dashboard() {
           <p className="text-sm text-muted-foreground">{loading ? "Loading your competitive coding pulse..." : "Here's your competitive coding pulse."}</p>
         </div>
 
-        <div className="grid gap-4 md:grid-cols-4">
+        <div className="grid gap-4 md:grid-cols-3">
           {stats.map((stat) => (
             <Card key={stat.label} className="border-border/60 p-5">
               <div className="flex items-center justify-between">
@@ -135,7 +134,7 @@ function Dashboard() {
 
         <Card className="border-border/60 p-5">
           <div className="mb-4 flex items-center justify-between">
-            <div><h3 className="font-semibold">Activity heatmap</h3><p className="text-xs text-muted-foreground">{user?.solved?.total ?? 0} solved / {user?.streak ?? 0}-day streak</p></div>
+            <div><h3 className="font-semibold">Activity heatmap</h3><p className="text-xs text-muted-foreground">{user?.solved?.total ?? 0} problems solved</p></div>
           </div>
           <Heatmap days={data?.activity ?? []} />
         </Card>

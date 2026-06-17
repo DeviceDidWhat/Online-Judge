@@ -2,7 +2,7 @@ import { createFileRoute, Link } from "@tanstack/react-router";
 import { Bar, BarChart, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
 import {
   Activity, CheckCircle2, Cpu, FileCode2, Flame, Loader2,
-  Plus, Server, Trophy, Users, XCircle,
+  Plus, Server, Trash2, Trophy, Users, XCircle,
 } from "lucide-react";
 import { useEffect, useMemo, useState, type FormEvent } from "react";
 import { toast } from "sonner";
@@ -32,6 +32,7 @@ import {
   type ApiLanguage,
   type ApiProblem,
   type ApiProblemStatus,
+  type ApiProblemVisibility,
   type ApiUser,
 } from "@/lib/api";
 import { useAuth } from "@/lib/auth";
@@ -43,18 +44,22 @@ export const Route = createFileRoute("/admin")({
 });
 
 // ─── Problem form types ───────────────────────────────────────────────────────
+type ExampleRow = { input: string; output: string; explanation: string };
+type TestCaseRow = { input: string; expectedOutput: string; hidden: boolean };
+
 type ProblemForm = {
   problemId: string;
   slug: string;
   title: string;
   difficulty: ApiDifficulty;
   status: ApiProblemStatus;
+  visibility: ApiProblemVisibility;
   tags: string;
   premium: boolean;
   description: string;
   constraints: string;
-  examples: string;
-  testCases: string;
+  examples: ExampleRow[];
+  testCases: TestCaseRow[];
   hints: string;
   timeLimitMs: string;
   memoryLimitMb: string;
@@ -66,12 +71,13 @@ const emptyForm: ProblemForm = {
   title: "",
   difficulty: "Easy",
   status: "draft",
+  visibility: "public",
   tags: "",
   premium: false,
   description: "",
   constraints: "",
-  examples: "input => output",
-  testCases: "input => expected output",
+  examples: [{ input: "", output: "", explanation: "" }],
+  testCases: [{ input: "", expectedOutput: "", hidden: true }],
   hints: "",
   timeLimitMs: "1000",
   memoryLimitMb: "256",
@@ -88,35 +94,14 @@ const splitLines = (value: string) => value
   .map((line) => line.trim())
   .filter(Boolean);
 
-const parsePairs = (value: string, outputKey: "output" | "expectedOutput") => {
-  const blocks = value
-    .split(/\r?\n---\r?\n/)
-    .map((block) => block.trim())
-    .filter(Boolean);
-
-  return blocks.map((block, index) => {
-    const separator = block.includes("=>") ? "=>" : "|";
-    const separatorIndex = block.indexOf(separator);
-    const input = separatorIndex >= 0 ? block.slice(0, separatorIndex) : "";
-    const output = separatorIndex >= 0 ? block.slice(separatorIndex + separator.length) : "";
-    return {
-      input: input.trim(),
-      [outputKey]: output.trim(),
-      ...(outputKey === "expectedOutput" ? { hidden: true, order: index + 1 } : {}),
-    };
-  });
-};
-
 const buildPayload = (form: ProblemForm) => {
-  const examples = parsePairs(form.examples, "output");
-  const testCases = parsePairs(form.testCases, "expectedOutput");
   if (!form.title.trim()) throw new Error("Title is required");
   if (!form.description.trim()) throw new Error("Description is required");
-  if (examples.length === 0 || examples.some((item) => !item.input || !("output" in item) || !item.output)) {
-    throw new Error("Add at least one example as input => output");
+  if (form.examples.length === 0 || form.examples.some((e) => !e.input.trim() || !e.output.trim())) {
+    throw new Error("Each example must have non-empty input and output");
   }
-  if (testCases.length === 0 || testCases.some((item) => !item.input || !("expectedOutput" in item) || !item.expectedOutput)) {
-    throw new Error("Add at least one testcase as input => expected output");
+  if (form.testCases.length === 0 || form.testCases.some((t) => !t.input.trim() || !t.expectedOutput.trim())) {
+    throw new Error("Each test case must have non-empty input and expected output");
   }
 
   return {
@@ -125,12 +110,22 @@ const buildPayload = (form: ProblemForm) => {
     title: form.title.trim(),
     difficulty: form.difficulty,
     status: form.status,
+    visibility: form.visibility,
     premium: form.premium,
     tags: form.tags.split(",").map((tag) => tag.trim()).filter(Boolean),
     description: form.description.trim(),
     constraints: splitLines(form.constraints),
-    examples,
-    testCases,
+    examples: form.examples.map(({ input, output, explanation }) => ({
+      input: input.trim(),
+      output: output.trim(),
+      ...(explanation.trim() ? { explanation: explanation.trim() } : {}),
+    })),
+    testCases: form.testCases.map(({ input, expectedOutput, hidden }, index) => ({
+      input: input.trim(),
+      expectedOutput: expectedOutput.trim(),
+      hidden,
+      order: index + 1,
+    })),
     hints: splitLines(form.hints),
     starterCode: {},
     timeLimitMs: Number(form.timeLimitMs) || 1000,
@@ -462,7 +457,7 @@ function Admin() {
                   </div>
                   <table className="w-full text-sm">
                     <thead className="bg-secondary/40 text-left text-xs uppercase tracking-wide text-muted-foreground">
-                      <tr><th className="px-4 py-3">ID</th><th className="px-4 py-3">Title</th><th className="px-4 py-3">Status</th><th className="px-4 py-3">Difficulty</th><th className="px-4 py-3">Acceptance</th><th className="px-4 py-3">Tests</th></tr>
+                      <tr><th className="px-4 py-3">ID</th><th className="px-4 py-3">Title</th><th className="px-4 py-3">Status</th><th className="px-4 py-3">Visibility</th><th className="px-4 py-3">Difficulty</th><th className="px-4 py-3">Acceptance</th><th className="px-4 py-3">Tests</th></tr>
                     </thead>
                     <tbody>
                       {problems.map((p) => (
@@ -473,6 +468,7 @@ function Admin() {
                             <div className="font-mono text-[10px] text-muted-foreground">{p.slug}</div>
                           </td>
                           <td className="px-4 py-3 text-muted-foreground">{p.status}</td>
+                          <td className="px-4 py-3 text-muted-foreground">{p.visibility ?? "public"}</td>
                           <td className={`px-4 py-3 font-medium ${difficultyClass[p.difficulty]}`}>{p.difficulty}</td>
                           <td className="px-4 py-3 text-muted-foreground">{p.acceptance}%</td>
                           <td className="px-4 py-3 text-muted-foreground">{p.testCases?.length ?? 0}</td>
@@ -638,7 +634,7 @@ function Admin() {
                 </DialogHeader>
 
                 <form className="space-y-5" onSubmit={createProblem}>
-                  <div className="grid gap-3 md:grid-cols-4">
+                  <div className="grid gap-3 md:grid-cols-5">
                     <Field label="ID"><Input value={form.problemId} onChange={(e) => setField("problemId", e.target.value)} inputMode="numeric" /></Field>
                     <Field label="Difficulty">
                       <Select value={form.difficulty} onValueChange={(value) => setField("difficulty", value as ApiDifficulty)}>
@@ -660,6 +656,15 @@ function Admin() {
                         </SelectContent>
                       </Select>
                     </Field>
+                    <Field label="Visibility">
+                      <Select value={form.visibility} onValueChange={(value) => setField("visibility", value as ApiProblemVisibility)}>
+                        <SelectTrigger><SelectValue /></SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="public">Public</SelectItem>
+                          <SelectItem value="contest_only">Contest Only</SelectItem>
+                        </SelectContent>
+                      </Select>
+                    </Field>
                     <Field label="Premium">
                       <div className="flex h-10 items-center"><Switch checked={form.premium} onCheckedChange={(value) => setField("premium", value)} /></div>
                     </Field>
@@ -678,10 +683,14 @@ function Admin() {
                     <Field label="Hints"><Textarea value={form.hints} onChange={(e) => setField("hints", e.target.value)} placeholder="One hint per line" /></Field>
                   </div>
 
-                  <div className="grid gap-3 md:grid-cols-2">
-                    <Field label="Examples"><Textarea value={form.examples} onChange={(e) => setField("examples", e.target.value)} className="min-h-40 font-mono" placeholder={"input\n=>\noutput\n---\ninput\n=>\noutput"} /></Field>
-                    <Field label="Testcases"><Textarea value={form.testCases} onChange={(e) => setField("testCases", e.target.value)} className="min-h-40 font-mono" placeholder={"input\n=>\nexpected output\n---\ninput\n=>\nexpected output"} /></Field>
-                  </div>
+                  <ExamplesEditor
+                    examples={form.examples}
+                    onChange={(rows) => setField("examples", rows)}
+                  />
+                  <TestCasesEditor
+                    testCases={form.testCases}
+                    onChange={(rows) => setField("testCases", rows)}
+                  />
 
                   <div className="grid gap-3 md:grid-cols-2">
                     <Field label="Time limit ms"><Input value={form.timeLimitMs} onChange={(e) => setField("timeLimitMs", e.target.value)} inputMode="numeric" /></Field>
@@ -784,6 +793,154 @@ function Admin() {
         )}
       </div>
     </AppShell>
+  );
+}
+
+function ExamplesEditor({
+  examples,
+  onChange,
+}: {
+  examples: ExampleRow[];
+  onChange: (rows: ExampleRow[]) => void;
+}) {
+  const add = () => onChange([...examples, { input: "", output: "", explanation: "" }]);
+  const remove = (i: number) => onChange(examples.filter((_, idx) => idx !== i));
+  const update = (i: number, key: keyof ExampleRow, value: string) =>
+    onChange(examples.map((e, idx) => (idx === i ? { ...e, [key]: value } : e)));
+
+  return (
+    <div className="space-y-2">
+      <div className="flex items-center justify-between">
+        <span className="text-xs font-medium text-muted-foreground">
+          Examples <span className="text-destructive">*</span>
+        </span>
+        <Button type="button" size="sm" variant="outline" className="h-7 text-xs gap-1" onClick={add}>
+          <Plus className="h-3 w-3" />Add example
+        </Button>
+      </div>
+      {examples.length === 0 && (
+        <p className="py-3 text-center text-xs text-muted-foreground rounded-lg border border-dashed border-border/60">
+          No examples yet. Click "Add example".
+        </p>
+      )}
+      {examples.map((ex, i) => (
+        <div key={i} className="rounded-lg border border-border/60 bg-card/40 p-3 space-y-2">
+          <div className="flex items-center justify-between">
+            <span className="text-xs font-semibold text-muted-foreground">Example {i + 1}</span>
+            <Button
+              type="button" size="sm" variant="ghost"
+              className="h-7 w-7 p-0 text-muted-foreground hover:text-destructive"
+              onClick={() => remove(i)}
+            >
+              <Trash2 className="h-3.5 w-3.5" />
+            </Button>
+          </div>
+          <div className="grid gap-2 md:grid-cols-2">
+            <div className="space-y-1">
+              <span className="text-[10px] uppercase tracking-wide text-muted-foreground">Input</span>
+              <Textarea
+                value={ex.input}
+                onChange={(e) => update(i, "input", e.target.value)}
+                className="min-h-18 font-mono text-xs resize-y"
+                placeholder="stdin…"
+              />
+            </div>
+            <div className="space-y-1">
+              <span className="text-[10px] uppercase tracking-wide text-muted-foreground">Output</span>
+              <Textarea
+                value={ex.output}
+                onChange={(e) => update(i, "output", e.target.value)}
+                className="min-h-18 font-mono text-xs resize-y"
+                placeholder="stdout…"
+              />
+            </div>
+          </div>
+          <div className="space-y-1">
+            <span className="text-[10px] uppercase tracking-wide text-muted-foreground">Explanation (optional)</span>
+            <Input
+              value={ex.explanation}
+              onChange={(e) => update(i, "explanation", e.target.value)}
+              className="text-xs"
+              placeholder="Brief note shown to the user below this example"
+            />
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function TestCasesEditor({
+  testCases,
+  onChange,
+}: {
+  testCases: TestCaseRow[];
+  onChange: (rows: TestCaseRow[]) => void;
+}) {
+  const add = () => onChange([...testCases, { input: "", expectedOutput: "", hidden: true }]);
+  const remove = (i: number) => onChange(testCases.filter((_, idx) => idx !== i));
+  const update = (i: number, key: keyof TestCaseRow, value: string | boolean) =>
+    onChange(testCases.map((t, idx) => (idx === i ? { ...t, [key]: value } : t)));
+
+  return (
+    <div className="space-y-2">
+      <div className="flex items-center justify-between">
+        <span className="text-xs font-medium text-muted-foreground">
+          Test Cases <span className="text-destructive">*</span>
+        </span>
+        <Button type="button" size="sm" variant="outline" className="h-7 text-xs gap-1" onClick={add}>
+          <Plus className="h-3 w-3" />Add test case
+        </Button>
+      </div>
+      {testCases.length === 0 && (
+        <p className="py-3 text-center text-xs text-muted-foreground rounded-lg border border-dashed border-border/60">
+          No test cases yet. Click "Add test case".
+        </p>
+      )}
+      {testCases.map((tc, i) => (
+        <div key={i} className="rounded-lg border border-border/60 bg-card/40 p-3 space-y-2">
+          <div className="flex items-center justify-between">
+            <span className="text-xs font-semibold text-muted-foreground">Test Case {i + 1}</span>
+            <div className="flex items-center gap-3">
+              <label className="flex items-center gap-1.5 cursor-pointer select-none">
+                <Switch
+                  checked={tc.hidden}
+                  onCheckedChange={(v) => update(i, "hidden", v)}
+                />
+                <span className="text-xs text-muted-foreground">Hidden</span>
+              </label>
+              <Button
+                type="button" size="sm" variant="ghost"
+                className="h-7 w-7 p-0 text-muted-foreground hover:text-destructive"
+                onClick={() => remove(i)}
+              >
+                <Trash2 className="h-3.5 w-3.5" />
+              </Button>
+            </div>
+          </div>
+          <div className="grid gap-2 md:grid-cols-2">
+            <div className="space-y-1">
+              <span className="text-[10px] uppercase tracking-wide text-muted-foreground">Input</span>
+              <Textarea
+                value={tc.input}
+                onChange={(e) => update(i, "input", e.target.value)}
+                className="min-h-18 font-mono text-xs resize-y"
+                placeholder="stdin…"
+              />
+            </div>
+            <div className="space-y-1">
+              <span className="text-[10px] uppercase tracking-wide text-muted-foreground">Expected Output</span>
+              <Textarea
+                value={tc.expectedOutput}
+                onChange={(e) => update(i, "expectedOutput", e.target.value)}
+                className="min-h-18 font-mono text-xs resize-y"
+                placeholder="expected stdout…"
+              />
+            </div>
+          </div>
+        </div>
+      ))}
+    </div>
   );
 }
 
