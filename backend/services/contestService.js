@@ -286,7 +286,8 @@ const finalizeContest = async (contestId) => {
   // ── Fix A: don't finalize while in-window submissions are still being judged ──
   // A last-second submission may still be Pending when the contest flips to ended.
   // Finalizing now would lock standings before that verdict is scored. Defer instead;
-  // transitionContestStatuses re-attempts finalize on a later tick once judging settles.
+  // returning false makes the contest-finalize BullMQ job retry (with backoff) until
+  // judging settles — see services/contestLifecycleWorkerService.js.
   const pendingCount = await Submission.countDocuments({ contest: contestId, verdict: 'Pending' });
   if (pendingCount > 0) {
     console.log(`[contestService] finalizeContest: ${pendingCount} submission(s) still judging for "${contest.name}" — deferring.`);
@@ -384,12 +385,9 @@ const finalizeContest = async (contestId) => {
 // ─────────────────────────────────────────────────────────────────────────────
 
 /**
- * Checks all contests and transitions statuses as needed:
- *   upcoming → live  (when now >= startsAt)
- *   live → ended     (when now >= startsAt + duration*60s)
- *
- * Then finalizes any newly ended contests that haven't been processed.
- * Called on every judge worker tick (~1.5s interval).
+ * Emits a contest status change to its room and to all connected clients.
+ * Used by the contest lifecycle worker (services/contestLifecycleWorkerService.js)
+ * right after a go-live/end job flips the status, and by finalizeContest above.
  */
 const emitStatusChange = (contest, status) => {
   try {
@@ -408,56 +406,10 @@ const emitStatusChange = (contest, status) => {
   }
 };
 
-const transitionContestStatuses = async () => {
-  const now = new Date();
-
-  try {
-    // ── upcoming → live ───────────────────────────────────────────────────────
-    // Fetch BEFORE updating so we have the documents to emit events for.
-    const toGoLive = await Contest.find({ status: 'upcoming', startsAt: { $lte: now } });
-    if (toGoLive.length > 0) {
-      await Contest.updateMany(
-        { status: 'upcoming', startsAt: { $lte: now } },
-        { $set: { status: 'live' } }
-      );
-      for (const c of toGoLive) {
-        console.log(`[contestService] Contest "${c.name}" → live`);
-        emitStatusChange(c, 'live');
-      }
-    }
-
-    // ── live → ended ──────────────────────────────────────────────────────────
-    const liveContests = await Contest.find({ status: 'live' });
-    const toEnd = liveContests.filter((c) => {
-      const endTime = new Date(c.startsAt).getTime() + c.duration * 60 * 1000;
-      return now.getTime() >= endTime;
-    });
-
-    for (const contest of toEnd) {
-      await Contest.findByIdAndUpdate(contest._id, { status: 'ended' });
-      console.log(`[contestService] Contest "${contest.name}" → ended`);
-      emitStatusChange(contest, 'ended');
-    }
-
-    // ── finalize ended-but-unprocessed contests ─────────────────────────────────
-    // Covers contests that just ended above AND any whose finalize was deferred
-    // (Fix A) because last-second submissions were still being judged. finalizeContest
-    // is idempotent and self-defers, so re-attempting every tick is safe.
-    const toFinalize = await Contest.find({ status: 'ended', ratingProcessed: false });
-    for (const contest of toFinalize) {
-      finalizeContest(contest._id).catch((err) =>
-        console.error(`[contestService] Error finalizing contest ${contest._id}:`, err)
-      );
-    }
-  } catch (err) {
-    console.error('[contestService] transitionContestStatuses error:', err);
-  }
-};
-
 module.exports = {
   updateContestScore,
   finalizeContest,
-  transitionContestStatuses,
+  emitStatusChange,
   rankRegistrations,
   codeforcesRatingUpdate,
 };

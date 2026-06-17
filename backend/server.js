@@ -22,6 +22,7 @@ const submissionRoutes = require('./routes/submissions');
 const userRoutes = require('./routes/users');
 const { verifyAccessToken } = require('./middlewares/auth');
 const { startJudgeWorker } = require('./services/judgeWorkerService');
+const { startContestLifecycleWorker } = require('./services/contestLifecycleWorkerService');
 const bodyParser = require('body-parser');
 const dns = require('dns');
 const dotenv = require('dotenv');
@@ -124,9 +125,12 @@ connectDB().then(() => {
     console.log(`Server running on port ${PORT}`);
   });
   if (process.env.JUDGE_WORKER_ENABLED === 'true') {
-    startJudgeWorker().catch((err) => {
+    try {
+      startJudgeWorker();
+      startContestLifecycleWorker();
+    } catch (err) {
       console.error('Failed to start embedded judge worker:', err);
-    });
+    }
   }
 }).catch((err) => {
   console.error('Failed to connect to MongoDB:', err);

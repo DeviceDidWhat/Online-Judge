@@ -4,9 +4,11 @@ const { getIO } = require('./index');
 /**
  * Watches the Contest collection for status transitions via MongoDB Change Streams.
  *
- * The worker process calls transitionContestStatuses() which does a silent
- * Contest.updateMany(). This watcher detects those DB writes and notifies all
- * connected clients so they can reload without refreshing.
+ * The contest lifecycle BullMQ worker (services/contestLifecycleWorkerService.js)
+ * flips status via a silent Contest.findOneAndUpdate() when its go-live/end jobs
+ * fire. This watcher detects those DB writes and notifies all connected clients
+ * so they can reload without refreshing — a fallback for processes that ran the
+ * write without direct Socket.IO access (e.g. a standalone worker process).
  *
  * Events emitted:
  *   contest:statusChange → to room `contest:<id>` with { contestId, status }

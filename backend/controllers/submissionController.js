@@ -4,6 +4,7 @@ const Submission = require('../models/submission');
 const JudgeJob = require('../models/judgeJob');
 const { asyncHandler, parsePagination, isObjectId } = require('../utils/controller');
 const { applySubmissionResult } = require('../services/submissionResultService');
+const { enqueueJudgeJob } = require('../services/judgeQueue');
 
 const canAccessSubmission = (req, submission) => (
   req.user.role === 'admin' || submission.user.toString() === req.user.id
@@ -62,10 +63,11 @@ const createSubmission = asyncHandler(async (req, res) => {
     verdict: 'Pending',
   });
 
-  await Promise.all([
+  const [judgeJob] = await Promise.all([
     JudgeJob.create({ submission: submission._id }),
     Problem.findByIdAndUpdate(foundProblem._id, { $inc: { totalSubmissions: 1 } }),
   ]);
+  await enqueueJudgeJob(judgeJob._id, { priority: judgeJob.priority });
 
   res.status(201).json({ submission });
 });

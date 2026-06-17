@@ -4,6 +4,8 @@ const ContestRegistration = require('../models/contestRegistration');
 const Problem = require('../models/problem');
 const Submission = require('../models/submission');
 const JudgeJob = require('../models/judgeJob');
+const { enqueueJudgeJob } = require('../services/judgeQueue');
+const { scheduleContestLifecycle, cancelContestLifecycle } = require('../services/contestQueue');
 const { finalizeContest } = require('../services/contestService');
 const { asyncHandler, parsePagination, escapeRegExp, isObjectId } = require('../utils/controller');
 const { getIO } = require('../socket');
@@ -68,6 +70,7 @@ const createContest = asyncHandler(async (req, res) => {
     problems,
     createdBy: req.user.id,
   });
+  await scheduleContestLifecycle(contest);
 
   // Broadcast to all connected clients so the contests list updates instantly
   try {
@@ -85,6 +88,14 @@ const updateContest = asyncHandler(async (req, res) => {
     { new: true, runValidators: true }
   );
   if (!contest) return res.status(404).json({ message: 'Contest not found' });
+
+  // startsAt/duration drive the scheduled go-live/end jobs — a delayed BullMQ job
+  // can't have its delay changed in place, so cancel and re-add with the new times.
+  if (req.body.startsAt !== undefined || req.body.duration !== undefined) {
+    await cancelContestLifecycle(contest._id);
+    await scheduleContestLifecycle(contest);
+  }
+
   res.json({ contest });
 });
 
@@ -92,6 +103,7 @@ const deleteContest = asyncHandler(async (req, res) => {
   const contest = await Contest.findOneAndDelete(contestLookup(req.params.id));
   if (!contest) return res.status(404).json({ message: 'Contest not found' });
   await ContestRegistration.deleteMany({ contest: contest._id });
+  await cancelContestLifecycle(contest._id);
   res.json({ message: 'Contest deleted' });
 });
 
@@ -198,10 +210,11 @@ const submitToContest = asyncHandler(async (req, res) => {
     submittedAt: new Date(),
   });
 
-  await Promise.all([
+  const [judgeJob] = await Promise.all([
     JudgeJob.create({ submission: submission._id }),
     Problem.findByIdAndUpdate(problem._id, { $inc: { totalSubmissions: 1 } }),
   ]);
+  await enqueueJudgeJob(judgeJob._id, { priority: judgeJob.priority });
 
   res.status(201).json({ submission });
 });
