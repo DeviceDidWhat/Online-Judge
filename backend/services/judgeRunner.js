@@ -5,14 +5,19 @@ const path = require('path');
 const { spawn } = require('child_process');
 const Language = require('../models/language');
 
+// Custom images bundle GNU `/usr/bin/time`, used to measure the program's own
+// runtime/memory inside the container (see backend/docker/*.Dockerfile). All are
+// Debian/Ubuntu-based so `time` is available consistently. Build them with
+// backend/docker/build.ps1 (or build.sh) before judging, or override per-language
+// via JUDGE_IMAGE_<LANG> env vars.
 const DEFAULT_DOCKER_IMAGES = {
-  cpp: 'gcc:13',
-  c: 'gcc:13',
-  python: 'python:3.10-alpine',
-  py: 'python:3.10-alpine',
-  javascript: 'node:18-alpine',
-  js: 'node:18-alpine',
-  java: 'eclipse-temurin:17',
+  cpp: 'judge-gcc:13',
+  c: 'judge-gcc:13',
+  python: 'judge-python:3.10',
+  py: 'judge-python:3.10',
+  javascript: 'judge-node:18',
+  js: 'judge-node:18',
+  java: 'judge-java:17',
 };
 
 const LANGUAGE_SPECS = {
@@ -58,16 +63,30 @@ const normalizeOutput = (value) => String(value ?? '')
   .replace(/\r/g, '\n')
   .trimEnd();
 
-const parseMemoryMb = (value) => {
-  const match = String(value || '').match(/([\d.]+)\s*(KiB|MiB|GiB|KB|MB|GB|B)/i);
-  if (!match) return 0;
-  const amount = Number(match[1]);
-  const unit = match[2].toLowerCase();
-  if (unit === 'gib' || unit === 'gb') return amount * 1024;
-  if (unit === 'mib' || unit === 'mb') return amount;
-  if (unit === 'kib' || unit === 'kb') return amount / 1024;
-  return amount / 1024 / 1024;
+// GNU `/usr/bin/time -f 'JUDGE_TIMING %e %U %S %M'` appends a line like
+// `JUDGE_TIMING 0.18 0.17 0.00 3456` to stderr: wall(s) user(s) sys(s) maxRSS(KB).
+// This measures only the user program, excluding the ~100-300ms container/shell
+// startup that previously dominated (and distorted) the reported runtime.
+const TIMING_REGEX = /JUDGE_TIMING\s+([\d.]+)\s+([\d.]+)\s+([\d.]+)\s+(\d+)/;
+
+const parseTiming = (stderr) => {
+  const match = String(stderr || '').match(TIMING_REGEX);
+  if (!match) return null;
+  const wallMs = Math.round(parseFloat(match[1]) * 1000);
+  const cpuMs = Math.round((parseFloat(match[2]) + parseFloat(match[3])) * 1000);
+  const memoryMb = Number(match[4]) / 1024;
+  return { wallMs, cpuMs, memoryMb };
 };
+
+// Remove the timing sentinel and GNU time's diagnostic lines so the user only
+// sees their program's actual stderr.
+const stripTiming = (stderr) => String(stderr || '')
+  .replace(/^.*JUDGE_TIMING.*\r?\n?/gm, '')
+  .replace(/^.*Command (?:exited with non-zero status|terminated by signal).*\r?\n?/gm, '');
+
+// POSIX single-quote escaping so an arbitrary run command can be safely passed
+// to the inner `sh -c` that GNU time invokes.
+const shSingleQuote = (value) => `'${String(value).replace(/'/g, `'\\''`)}'`;
 
 const execFile = (command, args, options = {}) => new Promise((resolve) => {
   const startedAt = process.hrtime.bigint();
@@ -102,58 +121,7 @@ const execFile = (command, args, options = {}) => new Promise((resolve) => {
   else child.stdin.end();
 });
 
-const execWithStats = (command, args, options = {}) => new Promise((resolve) => {
-  const startedAt = process.hrtime.bigint();
-  const child = spawn(command, args, {
-    cwd: options.cwd,
-    shell: false,
-    windowsHide: true,
-    stdio: ['pipe', 'pipe', 'pipe'],
-  });
-
-  let stdout = '';
-  let stderr = '';
-  let timedOut = false;
-  let maxMemoryMb = 0;
-  let statsTimer = null;
-
-  const pollStats = async () => {
-    if (!options.containerName) return;
-    const stats = await execFile('docker', ['stats', options.containerName, '--no-stream', '--format', '{{.MemUsage}}'], { timeoutMs: 1000 });
-    maxMemoryMb = Math.max(maxMemoryMb, parseMemoryMb(stats.stdout));
-  };
-
-  if (options.containerName) {
-    statsTimer = setInterval(() => {
-      pollStats().catch(() => {});
-    }, 100);
-  }
-
-  const timer = options.timeoutMs ? setTimeout(() => {
-    timedOut = true;
-    child.kill('SIGKILL');
-  }, options.timeoutMs) : null;
-
-  child.stdout.on('data', (chunk) => { stdout += chunk.toString(); });
-  child.stderr.on('data', (chunk) => { stderr += chunk.toString(); });
-  child.on('error', (error) => {
-    if (timer) clearTimeout(timer);
-    if (statsTimer) clearInterval(statsTimer);
-    resolve({ code: null, signal: null, stdout, stderr: stderr || error.message, timedOut, runtimeMs: 0, memoryMb: maxMemoryMb });
-  });
-  child.on('close', async (code, signal) => {
-    if (timer) clearTimeout(timer);
-    if (statsTimer) clearInterval(statsTimer);
-    await pollStats().catch(() => {});
-    const runtimeMs = Number(process.hrtime.bigint() - startedAt) / 1e6;
-    resolve({ code, signal, stdout, stderr, timedOut, runtimeMs, memoryMb: maxMemoryMb });
-  });
-
-  if (options.input) child.stdin.end(options.input);
-  else child.stdin.end();
-});
-
-const dockerArgs = ({ workDir, image, command, input, readonly, memoryLimitMb, timeLimitMs, name }) => {
+const dockerArgs = ({ workDir, image, command, input, readonly, memoryLimitMb, timeLimitMs, name, measure }) => {
   const args = [
     'run',
     '--name', name,
@@ -174,43 +142,33 @@ const dockerArgs = ({ workDir, image, command, input, readonly, memoryLimitMb, t
   if (extraSecurityOpt) args.push('--security-opt', extraSecurityOpt);
   if (input) args.push('-i');
 
-  args.push(image, 'sh', '-c', command);
+  // For program runs, measure the process itself with GNU time. The outer shell
+  // (and all container/startup overhead) is excluded from the measurement.
+  const finalCommand = measure
+    ? `/usr/bin/time -f 'JUDGE_TIMING %e %U %S %M' sh -c ${shSingleQuote(command)}`
+    : command;
+
+  args.push(image, 'sh', '-c', finalCommand);
   return { command: 'docker', args, timeoutMs: timeLimitMs + DOCKER_TIMEOUT_BUFFER_MS, input };
 };
 
 const runDocker = async (params) => {
   const execution = dockerArgs(params);
   try {
-    const runResult = await execWithStats(execution.command, execution.args, {
+    const runResult = await execFile(execution.command, execution.args, {
       input: execution.input,
       timeoutMs: execution.timeoutMs,
-      containerName: params.name,
     });
 
-    let innerRuntimeMs = null;
-    try {
-      const inspectResult = await execFile(
-        'docker',
-        ['inspect', params.name, '--format', '{{.State.StartedAt}} {{.State.FinishedAt}}'],
-        { timeoutMs: 2000 }
-      );
-      if (inspectResult.code === 0) {
-        const [startedAtStr, finishedAtStr] = inspectResult.stdout.trim().split(' ');
-        if (startedAtStr && finishedAtStr) {
-          const start = new Date(startedAtStr).getTime();
-          const end = new Date(finishedAtStr).getTime();
-          if (!isNaN(start) && !isNaN(end) && start > 0 && end >= start) {
-            innerRuntimeMs = end - start;
-          }
-        }
-      }
-    } catch (err) {
-      // Ignore inspect failures, fallback to process-level runtimeMs
-    }
-
+    // When measured, prefer GNU time's program-level wall/cpu/memory over the
+    // process-level runtimeMs (which includes container startup overhead).
+    const timing = parseTiming(runResult.stderr);
     return {
       ...runResult,
-      innerRuntimeMs,
+      stderr: timing ? stripTiming(runResult.stderr) : runResult.stderr,
+      measuredRuntimeMs: timing ? timing.wallMs : null,
+      measuredCpuMs: timing ? timing.cpuMs : null,
+      measuredMemoryMb: timing ? timing.memoryMb : null,
     };
   } finally {
     await execFile('docker', ['rm', '-f', params.name], { timeoutMs: 2000 });
@@ -287,10 +245,11 @@ const runSubmission = async ({ submission, problem }) => {
         memoryLimitMb,
         timeLimitMs,
         name: runName,
+        measure: true,
       });
 
-      const runtime = Math.ceil(runResult.innerRuntimeMs ?? runResult.runtimeMs);
-      const memory = Number(runResult.memoryMb.toFixed(2));
+      const runtime = Math.ceil(runResult.measuredRuntimeMs ?? runResult.runtimeMs);
+      const memory = Number((runResult.measuredMemoryMb ?? 0).toFixed(2));
       maxRuntime = Math.max(maxRuntime, runtime);
       maxMemory = Math.max(maxMemory, memory);
 
@@ -388,6 +347,7 @@ const runCode = async ({ language, sourceCode, input = '', timeLimitMs = 1000, m
       memoryLimitMb,
       timeLimitMs,
       name: runName,
+      measure: true,
     });
 
     return {
@@ -396,8 +356,8 @@ const runCode = async ({ language, sourceCode, input = '', timeLimitMs = 1000, m
       exitCode: runResult.code,
       stdout: runResult.stdout.slice(0, 12000),
       stderr: runResult.stderr.slice(0, 12000),
-      runtimeMs: Math.ceil(runResult.innerRuntimeMs ?? runResult.runtimeMs),
-      memoryMb: runResult.memoryMb ?? 0,
+      runtimeMs: Math.ceil(runResult.measuredRuntimeMs ?? runResult.runtimeMs),
+      memoryMb: Number((runResult.measuredMemoryMb ?? 0).toFixed(2)),
     };
   } finally {
     await fs.rm(workDir, { recursive: true, force: true });
