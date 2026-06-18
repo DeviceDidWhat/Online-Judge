@@ -3,9 +3,11 @@ import { motion } from "motion/react";
 import {
   ArrowRight, Code2, Cpu, Github, Sparkles, Trophy, Users, Zap,
 } from "lucide-react";
+import { useEffect, useState } from "react";
 import { Navbar } from "@/components/navbar";
 import { Button } from "@/components/ui/button";
 import { useAuth } from "@/lib/auth";
+import { apiRequest, ApiProblem, ApiContest, ApiPagination } from "@/lib/api";
 
 export const Route = createFileRoute("/")({
   head: () => ({
@@ -17,8 +19,63 @@ export const Route = createFileRoute("/")({
   component: Landing,
 });
 
+interface StatsData {
+  totalUsers: number;
+  problemCount: number;
+  submissionCount: number;
+  contestCount: number;
+}
+
+interface LeaderboardResponse {
+  users: any[];
+  pagination: ApiPagination;
+}
+
+interface SubmissionsResponse {
+  submissions: any[];
+  pagination: ApiPagination;
+}
+
 function Landing() {
   const { user } = useAuth();
+  const [stats, setStats] = useState<StatsData>({
+    totalUsers: 0,
+    problemCount: 0,
+    submissionCount: 0,
+    contestCount: 0,
+  });
+
+  useEffect(() => {
+    const fetchStats = async () => {
+      try {
+        const problemsResponse = await apiRequest<{ problems: ApiProblem[]; pagination: ApiPagination }>("/problems");
+        const contestsResponse = await apiRequest<{ contests: ApiContest[]; pagination: ApiPagination }>("/contests");
+        const leaderboardResponse = await apiRequest<LeaderboardResponse>("/users/leaderboard");
+
+        let submissionCount = 0;
+        if (user) {
+          try {
+            const submissionsResponse = await apiRequest<SubmissionsResponse>("/submissions?all=true");
+            submissionCount = submissionsResponse.pagination?.total || 0;
+          } catch {
+            // If we can't fetch submissions (not admin), just use 0
+            submissionCount = 0;
+          }
+        }
+
+        setStats({
+          totalUsers: leaderboardResponse.pagination?.total || 0,
+          problemCount: problemsResponse.pagination?.total || 0,
+          submissionCount,
+          contestCount: contestsResponse.pagination?.total || 0,
+        });
+      } catch (error) {
+        console.error("Failed to fetch stats:", error);
+      }
+    };
+
+    fetchStats();
+  }, [user]);
 
   return (
     <div className="relative min-h-screen overflow-hidden">
@@ -95,10 +152,10 @@ function Landing() {
         <section className="mx-auto max-w-7xl px-6 pb-20">
           <div className="grid grid-cols-2 gap-4 md:grid-cols-4">
             {[
-              { label: "Active users", value: "240k+" },
-              { label: "Problems", value: "3,142" },
-              { label: "Submissions / day", value: "1.2M" },
-              { label: "Contests run", value: "412" },
+              { label: "Total users", value: stats.totalUsers },
+              { label: "Problems", value: stats.problemCount },
+              { label: "Total submissions", value: stats.submissionCount },
+              { label: "Contests run", value: stats.contestCount },
             ].map((s) => (
               <div key={s.label} className="rounded-2xl border border-border/60 glass p-6">
                 <div className="text-3xl font-bold gradient-text">{s.value}</div>
@@ -112,11 +169,10 @@ function Landing() {
         <section className="mx-auto max-w-7xl px-6 pb-32">
           <div className="mb-12 text-center">
             <h2 className="text-3xl font-bold md:text-4xl">Everything you need to <span className="gradient-text">level up</span></h2>
-            <p className="mt-3 text-muted-foreground">From your first Two Sum to your first global top-100 finish.</p>
           </div>
           <div className="grid gap-4 md:grid-cols-3">
             {[
-              { icon: Code2, title: "Monaco-powered editor", body: "First-class editing for 30+ languages with syntax highlighting and Vim/Emacs modes." },
+              { icon: Code2, title: "Monaco-powered editor", body: "First-class editing for 5+ languages with syntax highlighting and Vim/Emacs modes." },
               { icon: Zap, title: "Real-time judging", body: "Submissions are evaluated in under a second with detailed per-testcase verdicts." },
               { icon: Trophy, title: "Weekly contests", body: "Compete head-to-head with thousands of programmers and track your live ranking." },
               { icon: Cpu, title: "Powerful sandbox", body: "Containerized workers with tight CPU and memory accounting — no flaky verdicts." },
