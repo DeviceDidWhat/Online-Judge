@@ -2,9 +2,11 @@ const crypto = require('crypto');
 const Contest = require('../models/contest');
 const ContestRegistration = require('../models/contestRegistration');
 const Problem = require('../models/problem');
+const TestCase = require('../models/testCase');
 const Submission = require('../models/submission');
 const JudgeJob = require('../models/judgeJob');
 const { enqueueJudgeJob } = require('../services/judgeQueue');
+const { bumpProblemStats } = require('../utils/problemStats');
 const { scheduleContestLifecycle, cancelContestLifecycle } = require('../services/contestQueue');
 const { finalizeContest } = require('../services/contestService');
 const { asyncHandler, parsePagination, escapeRegExp, isObjectId } = require('../utils/controller');
@@ -220,6 +222,7 @@ const submitToContest = asyncHandler(async (req, res) => {
   const problem = await Problem.findById(contestProblem.problem);
   if (!problem) return res.status(404).json({ message: 'Problem not found' });
 
+  const totalTestcases = await TestCase.countDocuments({ problem: problem._id });
   const submission = await Submission.create({
     submissionId: `sub_${Date.now()}_${crypto.randomBytes(4).toString('hex')}`,
     user: req.user.id,
@@ -228,14 +231,14 @@ const submitToContest = asyncHandler(async (req, res) => {
     contest: contest._id,
     language,
     sourceCode,
-    totalTestcases: problem.testCases.length,
+    totalTestcases,
     verdict: 'Pending',
     submittedAt: new Date(),
   });
 
   const [judgeJob] = await Promise.all([
     JudgeJob.create({ submission: submission._id }),
-    Problem.findByIdAndUpdate(problem._id, { $inc: { totalSubmissions: 1 } }),
+    bumpProblemStats(problem._id, { total: 1 }),
   ]);
   await enqueueJudgeJob(judgeJob._id, { priority: judgeJob.priority });
 
@@ -249,7 +252,7 @@ const getMyContestSubmissions = asyncHandler(async (req, res) => {
   if (!contest) return res.status(404).json({ message: 'Contest not found' });
 
   const submissions = await Submission.find({ contest: contest._id, user: req.user.id })
-    .select('-sourceCode')
+    .select('-sourceCode -testcaseResults -failedTestcase -stdout -stderr -compileOutput')
     .populate('problem', 'problemId slug title difficulty')
     .sort({ submittedAt: -1 });
 

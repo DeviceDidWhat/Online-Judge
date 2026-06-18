@@ -4,6 +4,7 @@ const os = require('os');
 const path = require('path');
 const { spawn } = require('child_process');
 const Language = require('../models/language');
+const TestCase = require('../models/testCase');
 
 // Custom images bundle GNU `/usr/bin/time`, used to measure the program's own
 // runtime/memory inside the container (see backend/docker/*.Dockerfile). All are
@@ -62,6 +63,16 @@ const normalizeOutput = (value) => String(value ?? '')
   .replace(/\r\n/g, '\n')
   .replace(/\r/g, '\n')
   .trimEnd();
+
+// Cap revealed test-case fields so a failing submission never stores/ships
+// megabytes (e.g. a 1e5-element input) into the submission document.
+const MAX_REVEAL_CHARS = 8000;
+const truncateField = (value) => {
+  const str = String(value ?? '');
+  return str.length > MAX_REVEAL_CHARS
+    ? `${str.slice(0, MAX_REVEAL_CHARS)}\n... (truncated)`
+    : str;
+};
 
 // GNU `/usr/bin/time -f 'JUDGE_TIMING %e %U %S %M'` appends a line like
 // `JUDGE_TIMING 0.18 0.17 0.00 3456` to stderr: wall(s) user(s) sys(s) maxRSS(KB).
@@ -122,6 +133,16 @@ const execFile = (command, args, options = {}) => new Promise((resolve) => {
 });
 
 const dockerArgs = ({ workDir, image, command, input, readonly, memoryLimitMb, timeLimitMs, name, measure }) => {
+  // Raise the stack ulimit (default 8 MB) so deep recursion — e.g. DFS over 1e5+
+  // nodes — doesn't segfault. We cap it at the problem's memory budget so a
+  // runaway recursion is bounded by the cgroup memory limit (counted as MLE)
+  // rather than crashing with a misleading runtime error. Configurable via
+  // JUDGE_STACK_LIMIT_MB; setting it to 'unlimited' uses -1 (bounded by memory).
+  const stackEnv = process.env.JUDGE_STACK_LIMIT_MB;
+  const stackLimit = stackEnv === 'unlimited'
+    ? '-1'
+    : String(Math.floor((Number(stackEnv) || memoryLimitMb) * 1024 * 1024));
+
   const args = [
     'run',
     '--name', name,
@@ -129,6 +150,7 @@ const dockerArgs = ({ workDir, image, command, input, readonly, memoryLimitMb, t
     '--cpus', process.env.JUDGE_DOCKER_CPUS || '1',
     '--memory', `${memoryLimitMb}m`,
     '--memory-swap', `${memoryLimitMb}m`,
+    '--ulimit', `stack=${stackLimit}:${stackLimit}`,
     '--pids-limit', process.env.JUDGE_DOCKER_PIDS_LIMIT || '128',
     '--cap-drop', 'ALL',
     '--security-opt', 'no-new-privileges',
@@ -207,7 +229,9 @@ const runSubmission = async ({ submission, problem }) => {
 
   const timeLimitMs = problem.timeLimitMs || 1000;
   const memoryLimitMb = problem.memoryLimitMb || 256;
-  const testcases = [...(problem.testCases || [])].sort((a, b) => (a.order || 0) - (b.order || 0));
+  // Test cases are stored out-of-document; count up front, then stream them with a
+  // cursor so only one case is held in memory at a time (large 1e5-sized inputs).
+  const totalTestcases = await TestCase.countDocuments({ problem: problem._id });
   const workDir = await fs.mkdtemp(path.join(os.tmpdir(), 'judge-'));
 
   try {
@@ -225,7 +249,7 @@ const runSubmission = async ({ submission, problem }) => {
         name: compileName,
       });
       if (compileResult.timedOut || compileResult.code !== 0) {
-        return createCompileError(compileResult.stderr || compileResult.stdout || 'Compilation failed', testcases.length);
+        return createCompileError(compileResult.stderr || compileResult.stdout || 'Compilation failed', totalTestcases);
       }
     }
 
@@ -233,70 +257,84 @@ const runSubmission = async ({ submission, problem }) => {
     let maxRuntime = 0;
     let maxMemory = 0;
 
-    for (let i = 0; i < testcases.length; i += 1) {
-      const testcase = testcases[i];
-      const runName = `judge_run_${crypto.randomBytes(8).toString('hex')}`;
-      const runResult = await runDocker({
-        workDir,
-        image: spec.image,
-        command: spec.run,
-        input: testcase.input,
-        readonly: true,
-        memoryLimitMb,
-        timeLimitMs,
-        name: runName,
-        measure: true,
-      });
+    const cursor = TestCase.find({ problem: problem._id }).sort({ order: 1 }).lean().cursor();
+    try {
+      let i = 0;
+      for (let testcase = await cursor.next(); testcase != null; testcase = await cursor.next(), i += 1) {
+        const runName = `judge_run_${crypto.randomBytes(8).toString('hex')}`;
+        const runResult = await runDocker({
+          workDir,
+          image: spec.image,
+          command: spec.run,
+          input: testcase.input,
+          readonly: true,
+          memoryLimitMb,
+          timeLimitMs,
+          name: runName,
+          measure: true,
+        });
 
-      const runtime = Math.ceil(runResult.measuredRuntimeMs ?? runResult.runtimeMs);
-      const memory = Number((runResult.measuredMemoryMb ?? 0).toFixed(2));
-      maxRuntime = Math.max(maxRuntime, runtime);
-      maxMemory = Math.max(maxMemory, memory);
+        const runtime = Math.ceil(runResult.measuredRuntimeMs ?? runResult.runtimeMs);
+        const memory = Number((runResult.measuredMemoryMb ?? 0).toFixed(2));
+        maxRuntime = Math.max(maxRuntime, runtime);
+        maxMemory = Math.max(maxMemory, memory);
 
-      const actualOutput = normalizeOutput(runResult.stdout);
-      const expectedOutput = normalizeOutput(testcase.expectedOutput);
-      let verdict = 'Accepted';
-      if (runResult.timedOut || runtime > timeLimitMs) verdict = 'TLE';
-      else if (runResult.code === 137 || /out of memory|killed/i.test(runResult.stderr)) verdict = 'MLE';
-      else if (runResult.code !== 0) verdict = 'Runtime Error';
-      else if (actualOutput !== expectedOutput) verdict = 'Wrong Answer';
+        const isHidden = testcase.hidden !== false; // default to hidden if unset
+        const actualOutput = normalizeOutput(runResult.stdout);
+        const expectedOutput = normalizeOutput(testcase.expectedOutput);
+        let verdict = 'Accepted';
+        if (runResult.timedOut || runtime > timeLimitMs) verdict = 'TLE';
+        else if (runResult.code === 137 || /out of memory|killed/i.test(runResult.stderr)) verdict = 'MLE';
+        else if (runResult.code !== 0) verdict = 'Runtime Error';
+        else if (actualOutput !== expectedOutput) verdict = 'Wrong Answer';
 
-      const result = {
-        index: i + 1,
-        verdict,
-        runtime,
-        memory,
-        stdout: runResult.stdout.slice(0, 4000),
-        stderr: runResult.stderr.slice(0, 4000),
-      };
-      testcaseResults.push(result);
-
-      if (verdict !== 'Accepted') {
-        return {
+        const result = {
+          index: i + 1,
           verdict,
-          runtime: maxRuntime,
-          memory: maxMemory,
-          testcasesPassed: i,
-          totalTestcases: testcases.length,
-          stdout: runResult.stdout.slice(0, 12000),
-          stderr: runResult.stderr.slice(0, 12000),
-          testcaseResults,
-          failedTestcase: {
-            input: testcase.input,
-            expectedOutput: testcase.expectedOutput,
-            actualOutput,
-            index: i + 1,
-          },
+          runtime,
+          memory,
+          // Never reveal the program's output on a hidden test case.
+          stdout: isHidden ? '' : runResult.stdout.slice(0, 4000),
+          stderr: runResult.stderr.slice(0, 4000),
         };
+        testcaseResults.push(result);
+
+        if (verdict !== 'Accepted') {
+          // Hidden test cases must never expose their input/expected/actual data,
+          // regardless of the verdict (WA/TLE/MLE/RE). Only the index is shared.
+          const failedTestcase = isHidden
+            ? { index: i + 1, hidden: true }
+            : {
+                input: truncateField(testcase.input),
+                expectedOutput: truncateField(testcase.expectedOutput),
+                actualOutput: truncateField(actualOutput),
+                index: i + 1,
+                hidden: false,
+              };
+
+          return {
+            verdict,
+            runtime: maxRuntime,
+            memory: maxMemory,
+            testcasesPassed: i,
+            totalTestcases,
+            stdout: isHidden ? '' : runResult.stdout.slice(0, 12000),
+            stderr: runResult.stderr.slice(0, 12000),
+            testcaseResults,
+            failedTestcase,
+          };
+        }
       }
+    } finally {
+      await cursor.close();
     }
 
     return {
       verdict: 'Accepted',
       runtime: maxRuntime,
       memory: maxMemory,
-      testcasesPassed: testcases.length,
-      totalTestcases: testcases.length,
+      testcasesPassed: totalTestcases,
+      totalTestcases,
       stdout: testcaseResults[testcaseResults.length - 1]?.stdout || '',
       stderr: '',
       testcaseResults,

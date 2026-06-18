@@ -41,6 +41,7 @@ const submissionSchema = new Schema({
     expectedOutput: String,
     actualOutput: String,
     index: Number,
+    hidden: Boolean,
   },
   testcaseResults: [testcaseResultSchema],
   submittedAt: { type: Date, default: Date.now, index: true },

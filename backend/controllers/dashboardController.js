@@ -11,7 +11,7 @@ const getDashboard = asyncHandler(async (req, res) => {
 
   const [user, recentSubmissions, activity, ratingHistory, verdictStats] = await Promise.all([
     User.findById(req.user.id).select('name username email role avatar country rating rank solved streak badges joinedAt preferences'),
-    Submission.find({ user: req.user.id }).select('-sourceCode').populate('problem', 'problemId slug title difficulty').sort({ submittedAt: -1 }).limit(10),
+    Submission.find({ user: req.user.id }).select('-sourceCode -testcaseResults -failedTestcase -stdout -stderr -compileOutput').populate('problem', 'problemId slug title difficulty').sort({ submittedAt: -1 }).limit(10),
     UserActivity.find({ user: req.user.id, date: { $gte: since } }).sort({ date: 1 }),
     RatingHistory.find({ user: req.user.id }).sort({ createdAt: 1 }).limit(50),
     Submission.aggregate([

@@ -7,12 +7,8 @@ const exampleSchema = new Schema({
   explanation: { type: String },
 }, { _id: false });
 
-const testCaseSchema = new Schema({
-  input: { type: String, required: true },
-  expectedOutput: { type: String, required: true },
-  hidden: { type: Boolean, default: true },
-  order: { type: Number, default: 0 },
-}, { _id: false });
+// NOTE: Test cases are stored in their own collection (see models/testCase.js),
+// not embedded here, to stay under MongoDB's 16 MB per-document limit.
 
 const editorialSectionSchema = new Schema({
   title: { type: String, trim: true, required: true },
@@ -37,7 +33,6 @@ const problemSchema = new Schema({
   hints: [{ type: String }],
   starterCode: { type: Map, of: String, default: {} },
   editorial: [editorialSectionSchema],
-  testCases: [testCaseSchema],
   timeLimitMs: { type: Number, default: 1000, min: 1 },
   memoryLimitMb: { type: Number, default: 256, min: 1 },
   totalSubmissions: { type: Number, default: 0, min: 0 },

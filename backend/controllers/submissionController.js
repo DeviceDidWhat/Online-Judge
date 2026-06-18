@@ -1,10 +1,12 @@
 const crypto = require('crypto');
 const Problem = require('../models/problem');
+const TestCase = require('../models/testCase');
 const Submission = require('../models/submission');
 const JudgeJob = require('../models/judgeJob');
 const { asyncHandler, parsePagination, isObjectId } = require('../utils/controller');
 const { applySubmissionResult } = require('../services/submissionResultService');
 const { enqueueJudgeJob } = require('../services/judgeQueue');
+const { bumpProblemStats } = require('../utils/problemStats');
 
 const canAccessSubmission = (req, submission) => (
   req.user.role === 'admin' || submission.user.toString() === req.user.id
@@ -23,7 +25,9 @@ const listSubmissions = asyncHandler(async (req, res) => {
 
   const [submissions, total] = await Promise.all([
     Submission.find(filter)
-      .select('-sourceCode')
+      // The list view only needs verdict/metrics — exclude the heavy per-testcase
+      // fields (which can be megabytes for large inputs) so the list loads fast.
+      .select('-sourceCode -testcaseResults -failedTestcase -stdout -stderr -compileOutput')
       .populate('user', 'username avatar')
       .populate('problem', 'problemId slug title difficulty')
       .sort({ submittedAt: -1 })
@@ -52,6 +56,7 @@ const createSubmission = asyncHandler(async (req, res) => {
     return res.status(403).json({ message: 'Problem is not available for submissions' });
   }
 
+  const totalTestcases = await TestCase.countDocuments({ problem: foundProblem._id });
   const submission = await Submission.create({
     submissionId: `sub_${Date.now()}_${crypto.randomBytes(4).toString('hex')}`,
     user: req.user.id,
@@ -59,13 +64,13 @@ const createSubmission = asyncHandler(async (req, res) => {
     problemTitle: foundProblem.title,
     language,
     sourceCode,
-    totalTestcases: foundProblem.testCases.length,
+    totalTestcases,
     verdict: 'Pending',
   });
 
   const [judgeJob] = await Promise.all([
     JudgeJob.create({ submission: submission._id }),
-    Problem.findByIdAndUpdate(foundProblem._id, { $inc: { totalSubmissions: 1 } }),
+    bumpProblemStats(foundProblem._id, { total: 1 }),
   ]);
   await enqueueJudgeJob(judgeJob._id, { priority: judgeJob.priority });
 
@@ -78,6 +83,17 @@ const getSubmission = asyncHandler(async (req, res) => {
     .populate('problem', 'problemId slug title difficulty');
   if (!submission) return res.status(404).json({ message: 'Submission not found' });
   if (!canAccessSubmission(req, submission)) return res.status(403).json({ message: 'Access denied' });
+
+  // Safety net for submissions judged before hidden-case data was sanitized at
+  // write time: if a failed case is not explicitly marked visible, strip its data.
+  const ft = submission.failedTestcase;
+  if (ft && ft.hidden !== false && (ft.input || ft.expectedOutput || ft.actualOutput)) {
+    ft.input = undefined;
+    ft.expectedOutput = undefined;
+    ft.actualOutput = undefined;
+    ft.hidden = true;
+  }
+
   res.json({ submission });
 });
 

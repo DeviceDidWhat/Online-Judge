@@ -1,13 +1,45 @@
 const Problem = require('../models/problem');
 const Contest = require('../models/contest');
+const TestCase = require('../models/testCase');
 const UserProblemProgress = require('../models/userProblemProgress');
-const { asyncHandler, parsePagination, escapeRegExp } = require('../utils/controller');
+const { asyncHandler, parsePagination, escapeRegExp, isObjectId } = require('../utils/controller');
 
 // Returns true if the problem is accessible in a live or ended contest
 const isAccessibleViaContest = (problemId) =>
   Contest.exists({ 'problems.problem': problemId, status: { $in: ['live', 'ended'] } });
 
-const publicProblemSelect = '-testCases -editorial';
+// editorial is the only large embedded field left on Problem; test cases now live
+// in their own collection (models/testCase.js).
+const publicProblemSelect = '-editorial';
+
+// Replace the full set of test cases for a problem (used by create/update). Stored
+// out-of-document so large inputs/outputs never bloat the Problem document.
+const replaceTestCases = async (problemId, testCases) => {
+  await TestCase.deleteMany({ problem: problemId });
+  if (Array.isArray(testCases) && testCases.length > 0) {
+    await TestCase.insertMany(testCases.map((tc, index) => ({
+      problem: problemId,
+      order: typeof tc.order === 'number' ? tc.order : index + 1,
+      input: tc.input,
+      expectedOutput: tc.expectedOutput,
+      hidden: tc.hidden ?? true,
+    })));
+  }
+};
+
+// Attach a `testCaseCount` to each (plain-object) problem in one aggregate query,
+// so the admin list can show counts without embedding the cases.
+const attachTestCaseCounts = async (problems) => {
+  if (problems.length === 0) return problems;
+  const ids = problems.map((problem) => problem._id);
+  const counts = await TestCase.aggregate([
+    { $match: { problem: { $in: ids } } },
+    { $group: { _id: '$problem', count: { $sum: 1 } } },
+  ]);
+  const byProblem = new Map(counts.map((row) => [String(row._id), row.count]));
+  problems.forEach((problem) => { problem.testCaseCount = byProblem.get(String(problem._id)) || 0; });
+  return problems;
+};
 
 const slugify = (value) => String(value || '')
   .trim()
@@ -61,8 +93,11 @@ const listProblems = asyncHandler(async (req, res) => {
     Problem.countDocuments(filter),
   ]);
 
+  const withProgress = await addUserProgress(problems, req.user?.id);
+  if (req.user?.role === 'admin') await attachTestCaseCounts(withProgress);
+
   res.json({
-    problems: await addUserProgress(problems, req.user?.id),
+    problems: withProgress,
     pagination: { page, limit, total, pages: Math.ceil(total / limit) },
   });
 });
@@ -81,6 +116,10 @@ const getProblem = asyncHandler(async (req, res) => {
   }
 
   const [payload] = await addUserProgress([problem], req.user?.id);
+  // Admins editing a problem need the full test-case set to populate the form.
+  if (isAdmin) {
+    payload.testCases = await TestCase.find({ problem: problem._id }).sort({ order: 1 }).lean();
+  }
   res.json({ problem: payload });
 });
 
@@ -89,29 +128,42 @@ const createProblem = asyncHandler(async (req, res) => {
   const slug = req.body.slug || slugify(req.body.title);
   if (!slug) return res.status(400).json({ message: 'A title or slug is required' });
 
+  const { testCases, ...problemFields } = req.body;
   const problem = await Problem.create({
-    ...req.body,
+    ...problemFields,
     problemId,
     slug,
     createdBy: req.user.id,
     updatedBy: req.user.id,
   });
-  res.status(201).json({ problem });
+  await replaceTestCases(problem._id, testCases);
+
+  const payload = problem.toObject();
+  payload.testCaseCount = Array.isArray(testCases) ? testCases.length : 0;
+  res.status(201).json({ problem: payload });
 });
 
 const updateProblem = asyncHandler(async (req, res) => {
+  const { testCases, ...problemFields } = req.body;
   const problem = await Problem.findOneAndUpdate(
     { slug: req.params.slug },
-    { ...req.body, updatedBy: req.user.id },
+    { ...problemFields, updatedBy: req.user.id },
     { new: true, runValidators: true }
   );
   if (!problem) return res.status(404).json({ message: 'Problem not found' });
-  res.json({ problem });
+
+  // Only touch test cases when the client actually sent them.
+  if (Array.isArray(testCases)) await replaceTestCases(problem._id, testCases);
+
+  const payload = problem.toObject();
+  payload.testCaseCount = await TestCase.countDocuments({ problem: problem._id });
+  res.json({ problem: payload });
 });
 
 const deleteProblem = asyncHandler(async (req, res) => {
   const problem = await Problem.findOneAndDelete({ slug: req.params.slug });
   if (!problem) return res.status(404).json({ message: 'Problem not found' });
+  await TestCase.deleteMany({ problem: problem._id });
   res.json({ message: 'Problem deleted' });
 });
 
@@ -185,6 +237,85 @@ const runCustom = asyncHandler(async (req, res) => {
   res.json({ result });
 });
 
+// ─── Test case management (admin) ──────────────────────────────────────────────
+// These operate on individual test cases in the standalone collection, so admins
+// can add/edit/remove cases on an existing problem without rewriting the whole set.
+
+const findProblemBySlug = (slug) => Problem.findOne({ slug }).select('_id');
+
+const listTestCases = asyncHandler(async (req, res) => {
+  const problem = await findProblemBySlug(req.params.slug);
+  if (!problem) return res.status(404).json({ message: 'Problem not found' });
+
+  const testCases = await TestCase.find({ problem: problem._id }).sort({ order: 1 }).lean();
+  res.json({ testCases });
+});
+
+// Append one or more test cases. Accepts either { testCases: [...] } or a single
+// { input, expectedOutput, hidden } body. Existing cases are left untouched and the
+// new ones are assigned order numbers continuing from the current maximum.
+const addTestCases = asyncHandler(async (req, res) => {
+  const problem = await findProblemBySlug(req.params.slug);
+  if (!problem) return res.status(404).json({ message: 'Problem not found' });
+
+  const incoming = Array.isArray(req.body.testCases)
+    ? req.body.testCases
+    : (req.body.input !== undefined || req.body.expectedOutput !== undefined ? [req.body] : []);
+
+  const valid = incoming.filter((tc) =>
+    tc && typeof tc.input === 'string' && tc.input.length > 0
+    && typeof tc.expectedOutput === 'string' && tc.expectedOutput.length > 0);
+
+  if (valid.length === 0) {
+    return res.status(400).json({ message: 'At least one test case with non-empty input and expectedOutput is required' });
+  }
+
+  const last = await TestCase.findOne({ problem: problem._id }).sort({ order: -1 }).select('order').lean();
+  let nextOrder = (last?.order || 0) + 1;
+
+  const created = await TestCase.insertMany(valid.map((tc) => ({
+    problem: problem._id,
+    order: nextOrder++,
+    input: tc.input,
+    expectedOutput: tc.expectedOutput,
+    hidden: tc.hidden ?? true,
+  })));
+
+  const testCaseCount = await TestCase.countDocuments({ problem: problem._id });
+  res.status(201).json({ testCases: created, testCaseCount });
+});
+
+const updateTestCase = asyncHandler(async (req, res) => {
+  if (!isObjectId(req.params.testCaseId)) return res.status(404).json({ message: 'Test case not found' });
+  const problem = await findProblemBySlug(req.params.slug);
+  if (!problem) return res.status(404).json({ message: 'Problem not found' });
+
+  const updates = {};
+  ['input', 'expectedOutput', 'hidden', 'order'].forEach((key) => {
+    if (req.body[key] !== undefined) updates[key] = req.body[key];
+  });
+
+  const testCase = await TestCase.findOneAndUpdate(
+    { _id: req.params.testCaseId, problem: problem._id },
+    updates,
+    { new: true, runValidators: true }
+  );
+  if (!testCase) return res.status(404).json({ message: 'Test case not found' });
+  res.json({ testCase });
+});
+
+const deleteTestCase = asyncHandler(async (req, res) => {
+  if (!isObjectId(req.params.testCaseId)) return res.status(404).json({ message: 'Test case not found' });
+  const problem = await findProblemBySlug(req.params.slug);
+  if (!problem) return res.status(404).json({ message: 'Problem not found' });
+
+  const deleted = await TestCase.findOneAndDelete({ _id: req.params.testCaseId, problem: problem._id });
+  if (!deleted) return res.status(404).json({ message: 'Test case not found' });
+
+  const testCaseCount = await TestCase.countDocuments({ problem: problem._id });
+  res.json({ message: 'Test case deleted', testCaseCount });
+});
+
 module.exports = {
   listProblems,
   getProblem,
@@ -195,4 +326,8 @@ module.exports = {
   toggleBookmark,
   saveCode,
   runCustom,
+  listTestCases,
+  addTestCases,
+  updateTestCase,
+  deleteTestCase,
 };

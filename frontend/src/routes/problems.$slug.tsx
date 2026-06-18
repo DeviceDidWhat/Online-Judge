@@ -37,6 +37,37 @@ const fallbackLanguages: ApiLanguage[] = [
   { languageId: "java", label: "Java 17", monaco: "java" },
 ];
 
+// Default starter code shown for every problem when the user has no saved code yet,
+// and what the Reset button restores to.
+const defaultTemplates: Record<string, string> = {
+  cpp: `#include <bits/stdc++.h>
+using namespace std;
+
+int main() {
+    //Write your code here
+    return 0;
+}`,
+  c: `#include <stdio.h>
+
+int main() {
+    // Write your code here
+    return 0;
+}`,
+  java: `import java.util.*;
+
+public class Main {
+    public static void main(String[] args) {
+        // Write your code here
+    }
+}`,
+  python: `# Write your code here
+`,
+  javascript: `// Write your code here
+`,
+};
+
+const templateFor = (languageId: string) => defaultTemplates[languageId] ?? "";
+
 const formatLanguage = (languages: ApiLanguage[], languageId: string) =>
   languages.find((item) => item.languageId === languageId)?.label ?? languageId;
 
@@ -50,16 +81,22 @@ const resultText = (submission: ApiSubmission) => {
   if (submission.compileOutput) lines.push("", "Compile output:", submission.compileOutput);
   if (submission.stderr) lines.push("", "stderr:", submission.stderr);
   if (submission.failedTestcase) {
-    lines.push(
-      "",
-      `Failed testcase ${submission.failedTestcase.index ?? ""}`,
-      "Input:",
-      submission.failedTestcase.input ?? "",
-      "Expected:",
-      submission.failedTestcase.expectedOutput ?? "",
-      "Got:",
-      submission.failedTestcase.actualOutput ?? "",
-    );
+    const ft = submission.failedTestcase;
+    if (ft.hidden) {
+      // Hidden test cases never reveal their data — only which one failed.
+      lines.push("", `Failed on hidden testcase ${ft.index ?? ""}`);
+    } else {
+      lines.push(
+        "",
+        `Failed testcase ${ft.index ?? ""}`,
+        "Input:",
+        ft.input ?? "",
+        "Expected:",
+        ft.expectedOutput ?? "",
+        "Got:",
+        ft.actualOutput ?? "",
+      );
+    }
   }
   return lines.join("\n");
 };
@@ -168,7 +205,7 @@ function ProblemDetail() {
         setProgress(progressData.progress);
         setSubmissions(submissionData.submissions);
         setLang(firstLanguage);
-        setCode(saved?.code ?? "");
+        setCode(saved?.code ?? templateFor(firstLanguage));
         setCustomInput(problemData.problem.examples[0]?.input ?? "");
       })
       .catch((error) => {
@@ -188,7 +225,7 @@ function ProblemDetail() {
 
   const selectLanguage = (value: string) => {
     setLang(value);
-    setCode(savedCodeByLanguage.get(value) ?? "");
+    setCode(savedCodeByLanguage.get(value) ?? templateFor(value));
   };
 
   const saveCurrentCode = async () => {
@@ -595,7 +632,7 @@ function ProblemDetail() {
                   <Button variant="ghost" size="sm" className="h-7" onClick={saveCurrentCode} disabled={savingCode}>
                     {savingCode ? "Saving..." : "Save"}
                   </Button>
-                  <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => setCode("")}>
+                  <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => setCode(templateFor(lang))} title="Reset to starter template">
                     <RotateCcw className="h-3.5 w-3.5" />
                   </Button>
                   <Select value={String(fontSize)} onValueChange={(value) => setFontSize(Number(value))}>

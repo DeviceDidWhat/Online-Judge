@@ -1,7 +1,7 @@
-const Problem = require('../models/problem');
 const Submission = require('../models/submission');
 const ContestRegistration = require('../models/contestRegistration');
 const { updateProgressForSubmission } = require('../utils/problemProgress');
+const { bumpProblemStats } = require('../utils/problemStats');
 const { updateContestScore } = require('./contestService');
 const { getIO } = require('../socket');
 
@@ -44,7 +44,7 @@ const applySubmissionResult = async (submissionId, result) => {
   });
 
   if (submission.verdict === 'Accepted' && !wasAccepted) {
-    await Problem.findByIdAndUpdate(submission.problem, { $inc: { acceptedSubmissions: 1 } });
+    await bumpProblemStats(submission.problem, { accepted: 1 });
   }
 
   if (wasPending) {

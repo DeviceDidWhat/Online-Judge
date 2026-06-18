@@ -2,7 +2,7 @@ import { createFileRoute, Link } from "@tanstack/react-router";
 import { Bar, BarChart, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
 import {
   Activity, CheckCircle2, Cpu, FileCode2, Flame, Loader2,
-  Plus, Server, Trash2, Trophy, Users, XCircle,
+  Pencil, Plus, Server, Trash2, Trophy, Users, XCircle,
 } from "lucide-react";
 import { useEffect, useMemo, useState, type FormEvent } from "react";
 import { toast } from "sonner";
@@ -24,6 +24,16 @@ import {
 } from "@/components/ui/dialog";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
+import {
   apiRequest,
   type ApiContest,
   type ApiDifficulty,
@@ -33,6 +43,7 @@ import {
   type ApiProblem,
   type ApiProblemStatus,
   type ApiProblemVisibility,
+  type ApiTestCase,
   type ApiUser,
 } from "@/lib/api";
 import { useAuth } from "@/lib/auth";
@@ -94,17 +105,20 @@ const splitLines = (value: string) => value
   .map((line) => line.trim())
   .filter(Boolean);
 
-const buildPayload = (form: ProblemForm) => {
+// When editing an existing problem, test cases are managed separately (via the
+// Tests dialog), so they are omitted from the payload — sending them would
+// replace the whole set on the backend.
+const buildPayload = (form: ProblemForm, { includeTestCases }: { includeTestCases: boolean }) => {
   if (!form.title.trim()) throw new Error("Title is required");
   if (!form.description.trim()) throw new Error("Description is required");
   if (form.examples.length === 0 || form.examples.some((e) => !e.input.trim() || !e.output.trim())) {
     throw new Error("Each example must have non-empty input and output");
   }
-  if (form.testCases.length === 0 || form.testCases.some((t) => !t.input.trim() || !t.expectedOutput.trim())) {
+  if (includeTestCases && (form.testCases.length === 0 || form.testCases.some((t) => !t.input.trim() || !t.expectedOutput.trim()))) {
     throw new Error("Each test case must have non-empty input and expected output");
   }
 
-  return {
+  const payload: Record<string, unknown> = {
     ...(form.problemId ? { problemId: Number(form.problemId) } : {}),
     ...(form.slug ? { slug: slugify(form.slug) } : {}),
     title: form.title.trim(),
@@ -120,18 +134,43 @@ const buildPayload = (form: ProblemForm) => {
       output: output.trim(),
       ...(explanation.trim() ? { explanation: explanation.trim() } : {}),
     })),
-    testCases: form.testCases.map(({ input, expectedOutput, hidden }, index) => ({
+    hints: splitLines(form.hints),
+    timeLimitMs: Number(form.timeLimitMs) || 1000,
+    memoryLimitMb: Number(form.memoryLimitMb) || 256,
+  };
+
+  if (includeTestCases) {
+    payload.starterCode = {};
+    payload.testCases = form.testCases.map(({ input, expectedOutput, hidden }, index) => ({
       input: input.trim(),
       expectedOutput: expectedOutput.trim(),
       hidden,
       order: index + 1,
-    })),
-    hints: splitLines(form.hints),
-    starterCode: {},
-    timeLimitMs: Number(form.timeLimitMs) || 1000,
-    memoryLimitMb: Number(form.memoryLimitMb) || 256,
-  };
+    }));
+  }
+
+  return payload;
 };
+
+// Convert an existing problem into the editable form shape.
+const formFromProblem = (p: ApiProblem): ProblemForm => ({
+  problemId: String(p.problemId ?? ""),
+  slug: p.slug ?? "",
+  title: p.title ?? "",
+  difficulty: p.difficulty,
+  status: p.status,
+  visibility: p.visibility ?? "public",
+  tags: (p.tags ?? []).join(", "),
+  premium: !!p.premium,
+  description: p.description ?? "",
+  constraints: (p.constraints ?? []).join("\n"),
+  examples: (p.examples?.length ? p.examples : [{ input: "", output: "", explanation: "" }])
+    .map((e) => ({ input: e.input ?? "", output: e.output ?? "", explanation: e.explanation ?? "" })),
+  testCases: [{ input: "", expectedOutput: "", hidden: true }],
+  hints: (p.hints ?? []).join("\n"),
+  timeLimitMs: String(p.timeLimitMs ?? 1000),
+  memoryLimitMb: String(p.memoryLimitMb ?? 256),
+});
 
 // ─── Contest form types ───────────────────────────────────────────────────────
 type ContestProblemRow = {
@@ -176,6 +215,22 @@ function Admin() {
   const [dialogOpen, setDialogOpen] = useState(false);
   const [saving, setSaving] = useState(false);
   const [form, setForm] = useState<ProblemForm>(emptyForm);
+  const [editingSlug, setEditingSlug] = useState<string | null>(null);
+
+  // Test case management dialog
+  const [tcDialogOpen, setTcDialogOpen] = useState(false);
+  const [tcProblem, setTcProblem] = useState<ApiProblem | null>(null);
+  const [existingTestCases, setExistingTestCases] = useState<ApiTestCase[]>([]);
+  const [tcLoading, setTcLoading] = useState(false);
+  const [tcSaving, setTcSaving] = useState(false);
+  const [newTestCases, setNewTestCases] = useState<TestCaseRow[]>([]);
+  const [editingTcId, setEditingTcId] = useState<string | null>(null);
+  const [editDraft, setEditDraft] = useState<TestCaseRow>({ input: "", expectedOutput: "", hidden: true });
+  const [tcUpdating, setTcUpdating] = useState(false);
+
+  // Delete-problem confirmation
+  const [deleteTarget, setDeleteTarget] = useState<ApiProblem | null>(null);
+  const [deleting, setDeleting] = useState(false);
 
   // Contest dialog
   const [contestDialogOpen, setContestDialogOpen] = useState(false);
@@ -239,7 +294,14 @@ function Admin() {
 
   // ── Problem dialog ──
   const openCreateDialog = () => {
+    setEditingSlug(null);
     setForm({ ...emptyForm, problemId: String(nextProblemId) });
+    setDialogOpen(true);
+  };
+
+  const openEditDialog = (problem: ApiProblem) => {
+    setEditingSlug(problem.slug);
+    setForm(formFromProblem(problem));
     setDialogOpen(true);
   };
 
@@ -251,22 +313,153 @@ function Admin() {
     }));
   };
 
-  const createProblem = async (event: FormEvent) => {
+  const submitProblem = async (event: FormEvent) => {
     event.preventDefault();
     setSaving(true);
     try {
-      const payload = buildPayload(form);
-      const data = await apiRequest<{ problem: ApiProblem }>("/problems", {
-        method: "POST",
-        body: JSON.stringify(payload),
-      });
-      setProblems((current) => [...current, data.problem].sort((a, b) => a.problemId - b.problemId));
+      const isEdit = editingSlug !== null;
+      const payload = buildPayload(form, { includeTestCases: !isEdit });
+      if (isEdit) {
+        const data = await apiRequest<{ problem: ApiProblem }>(`/problems/${editingSlug}`, {
+          method: "PUT",
+          body: JSON.stringify(payload),
+        });
+        setProblems((current) => current
+          .map((p) => (p.slug === editingSlug ? { ...p, ...data.problem } : p))
+          .sort((a, b) => a.problemId - b.problemId));
+        toast.success("Problem updated");
+      } else {
+        const data = await apiRequest<{ problem: ApiProblem }>("/problems", {
+          method: "POST",
+          body: JSON.stringify(payload),
+        });
+        setProblems((current) => [...current, data.problem].sort((a, b) => a.problemId - b.problemId));
+        toast.success("Problem added to database");
+      }
       setDialogOpen(false);
-      toast.success("Problem added to database");
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : "Unable to create problem");
+      toast.error(error instanceof Error ? error.message : "Unable to save problem");
     } finally {
       setSaving(false);
+    }
+  };
+
+  // ── Test case management ──
+  const setProblemTestCaseCount = (problemId: string, count: number) => {
+    setProblems((current) => current.map((p) => (p._id === problemId ? { ...p, testCaseCount: count } : p)));
+  };
+
+  const openTestCaseDialog = async (problem: ApiProblem) => {
+    setTcProblem(problem);
+    setNewTestCases([]);
+    setExistingTestCases([]);
+    setEditingTcId(null);
+    setTcDialogOpen(true);
+    setTcLoading(true);
+    try {
+      const data = await apiRequest<{ testCases: ApiTestCase[] }>(`/problems/${problem.slug}/testcases`);
+      setExistingTestCases(data.testCases);
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Unable to load test cases");
+    } finally {
+      setTcLoading(false);
+    }
+  };
+
+  const addTestCasesToProblem = async () => {
+    if (!tcProblem) return;
+    if (newTestCases.length === 0 || newTestCases.some((t) => !t.input.trim() || !t.expectedOutput.trim())) {
+      toast.error("Each new test case must have non-empty input and expected output");
+      return;
+    }
+    setTcSaving(true);
+    try {
+      const payload = {
+        testCases: newTestCases.map(({ input, expectedOutput, hidden }) => ({
+          input: input.trim(),
+          expectedOutput: expectedOutput.trim(),
+          hidden,
+        })),
+      };
+      const data = await apiRequest<{ testCases: ApiTestCase[]; testCaseCount: number }>(
+        `/problems/${tcProblem.slug}/testcases`,
+        { method: "POST", body: JSON.stringify(payload) },
+      );
+      setExistingTestCases((current) => [...current, ...data.testCases]);
+      setNewTestCases([]);
+      setProblemTestCaseCount(tcProblem._id, data.testCaseCount);
+      toast.success(`Added ${data.testCases.length} test case(s)`);
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Unable to add test cases");
+    } finally {
+      setTcSaving(false);
+    }
+  };
+
+  const deleteExistingTestCase = async (testCaseId: string) => {
+    if (!tcProblem) return;
+    try {
+      const data = await apiRequest<{ testCaseCount: number }>(
+        `/problems/${tcProblem.slug}/testcases/${testCaseId}`,
+        { method: "DELETE" },
+      );
+      setExistingTestCases((current) => current.filter((tc) => tc._id !== testCaseId));
+      setProblemTestCaseCount(tcProblem._id, data.testCaseCount);
+      toast.success("Test case deleted");
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Unable to delete test case");
+    }
+  };
+
+  const startEditTestCase = (tc: ApiTestCase) => {
+    setEditingTcId(tc._id);
+    setEditDraft({ input: tc.input, expectedOutput: tc.expectedOutput, hidden: tc.hidden });
+  };
+
+  const cancelEditTestCase = () => {
+    setEditingTcId(null);
+  };
+
+  const saveEditTestCase = async () => {
+    if (!tcProblem || !editingTcId) return;
+    if (!editDraft.input.trim() || !editDraft.expectedOutput.trim()) {
+      toast.error("Input and expected output cannot be empty");
+      return;
+    }
+    setTcUpdating(true);
+    try {
+      const payload = {
+        input: editDraft.input.trim(),
+        expectedOutput: editDraft.expectedOutput.trim(),
+        hidden: editDraft.hidden,
+      };
+      const data = await apiRequest<{ testCase: ApiTestCase }>(
+        `/problems/${tcProblem.slug}/testcases/${editingTcId}`,
+        { method: "PATCH", body: JSON.stringify(payload) },
+      );
+      setExistingTestCases((current) => current.map((tc) => (tc._id === editingTcId ? data.testCase : tc)));
+      setEditingTcId(null);
+      toast.success("Test case updated");
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Unable to update test case");
+    } finally {
+      setTcUpdating(false);
+    }
+  };
+
+  // ── Delete problem ──
+  const confirmDeleteProblem = async () => {
+    if (!deleteTarget) return;
+    setDeleting(true);
+    try {
+      await apiRequest(`/problems/${deleteTarget.slug}`, { method: "DELETE" });
+      setProblems((current) => current.filter((p) => p._id !== deleteTarget._id));
+      toast.success(`Deleted "${deleteTarget.title}" and its test cases`);
+      setDeleteTarget(null);
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Unable to delete problem");
+    } finally {
+      setDeleting(false);
     }
   };
 
@@ -457,7 +650,7 @@ function Admin() {
                   </div>
                   <table className="w-full text-sm">
                     <thead className="bg-secondary/40 text-left text-xs uppercase tracking-wide text-muted-foreground">
-                      <tr><th className="px-4 py-3">ID</th><th className="px-4 py-3">Title</th><th className="px-4 py-3">Status</th><th className="px-4 py-3">Visibility</th><th className="px-4 py-3">Difficulty</th><th className="px-4 py-3">Acceptance</th><th className="px-4 py-3">Tests</th></tr>
+                      <tr><th className="px-4 py-3">ID</th><th className="px-4 py-3">Title</th><th className="px-4 py-3">Status</th><th className="px-4 py-3">Visibility</th><th className="px-4 py-3">Difficulty</th><th className="px-4 py-3">Acceptance</th><th className="px-4 py-3">Tests</th><th className="px-4 py-3">Actions</th></tr>
                     </thead>
                     <tbody>
                       {problems.map((p) => (
@@ -471,11 +664,39 @@ function Admin() {
                           <td className="px-4 py-3 text-muted-foreground">{p.visibility ?? "public"}</td>
                           <td className={`px-4 py-3 font-medium ${difficultyClass[p.difficulty]}`}>{p.difficulty}</td>
                           <td className="px-4 py-3 text-muted-foreground">{p.acceptance}%</td>
-                          <td className="px-4 py-3 text-muted-foreground">{p.testCases?.length ?? 0}</td>
+                          <td className="px-4 py-3">
+                            <Button
+                              size="sm" variant="outline" className="h-7 gap-1.5 text-xs"
+                              onClick={() => openTestCaseDialog(p)}
+                            >
+                              <FileCode2 className="h-3 w-3" />
+                              {p.testCaseCount ?? p.testCases?.length ?? 0} tests
+                            </Button>
+                          </td>
+                          <td className="px-4 py-3">
+                            <div className="flex items-center gap-1">
+                              <Button
+                                size="sm" variant="ghost"
+                                className="h-7 w-7 p-0 text-muted-foreground hover:text-foreground"
+                                onClick={() => openEditDialog(p)}
+                                title="Edit problem"
+                              >
+                                <Pencil className="h-3.5 w-3.5" />
+                              </Button>
+                              <Button
+                                size="sm" variant="ghost"
+                                className="h-7 w-7 p-0 text-muted-foreground hover:text-destructive"
+                                onClick={() => setDeleteTarget(p)}
+                                title="Delete problem"
+                              >
+                                <Trash2 className="h-3.5 w-3.5" />
+                              </Button>
+                            </div>
+                          </td>
                         </tr>
                       ))}
                       {!loadingProblems && problems.length === 0 && (
-                        <tr><td colSpan={6} className="px-4 py-8 text-center text-muted-foreground">No problems in database.</td></tr>
+                        <tr><td colSpan={8} className="px-4 py-8 text-center text-muted-foreground">No problems in database.</td></tr>
                       )}
                     </tbody>
                   </table>
@@ -625,15 +846,19 @@ function Admin() {
               </TabsContent>
             </Tabs>
 
-            {/* ── Problem create dialog ── */}
+            {/* ── Problem create / edit dialog ── */}
             <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
               <DialogContent className="max-h-[92vh] overflow-y-auto sm:max-w-4xl">
                 <DialogHeader>
-                  <DialogTitle>Add problem</DialogTitle>
-                  <DialogDescription>Create a stdin/stdout problem and store it in MongoDB.</DialogDescription>
+                  <DialogTitle>{editingSlug ? "Edit problem" : "Add problem"}</DialogTitle>
+                  <DialogDescription>
+                    {editingSlug
+                      ? "Update this problem's details. Test cases are managed separately via the Tests button."
+                      : "Create a stdin/stdout problem and store it in MongoDB."}
+                  </DialogDescription>
                 </DialogHeader>
 
-                <form className="space-y-5" onSubmit={createProblem}>
+                <form className="space-y-5" onSubmit={submitProblem}>
                   <div className="grid gap-3 md:grid-cols-5">
                     <Field label="ID"><Input value={form.problemId} onChange={(e) => setField("problemId", e.target.value)} inputMode="numeric" /></Field>
                     <Field label="Difficulty">
@@ -687,10 +912,17 @@ function Admin() {
                     examples={form.examples}
                     onChange={(rows) => setField("examples", rows)}
                   />
-                  <TestCasesEditor
-                    testCases={form.testCases}
-                    onChange={(rows) => setField("testCases", rows)}
-                  />
+                  {editingSlug ? (
+                    <p className="rounded-lg border border-dashed border-border/60 px-3 py-2 text-xs text-muted-foreground">
+                      Test cases are managed separately — close this dialog and use the
+                      <span className="font-medium text-foreground"> Tests </span> button on the problem row.
+                    </p>
+                  ) : (
+                    <TestCasesEditor
+                      testCases={form.testCases}
+                      onChange={(rows) => setField("testCases", rows)}
+                    />
+                  )}
 
                   <div className="grid gap-3 md:grid-cols-2">
                     <Field label="Time limit ms"><Input value={form.timeLimitMs} onChange={(e) => setField("timeLimitMs", e.target.value)} inputMode="numeric" /></Field>
@@ -699,11 +931,167 @@ function Admin() {
 
                   <DialogFooter>
                     <Button type="button" variant="outline" onClick={() => setDialogOpen(false)} disabled={saving}>Cancel</Button>
-                    <Button type="submit" className="gradient-primary text-primary-foreground" disabled={saving}>{saving ? "Saving..." : "Add problem"}</Button>
+                    <Button type="submit" className="gradient-primary text-primary-foreground" disabled={saving}>{saving ? "Saving..." : (editingSlug ? "Save changes" : "Add problem")}</Button>
                   </DialogFooter>
                 </form>
               </DialogContent>
             </Dialog>
+
+            {/* ── Test case management dialog ── */}
+            <Dialog open={tcDialogOpen} onOpenChange={setTcDialogOpen}>
+              <DialogContent className="max-h-[92vh] overflow-y-auto sm:max-w-4xl">
+                <DialogHeader>
+                  <DialogTitle>Test cases — {tcProblem?.title}</DialogTitle>
+                  <DialogDescription>Add, review, or remove test cases for this problem. Changes apply immediately.</DialogDescription>
+                </DialogHeader>
+
+                <div className="space-y-5">
+                  {/* Existing test cases */}
+                  <div className="space-y-2">
+                    <span className="text-xs font-medium text-muted-foreground">
+                      Existing test cases ({existingTestCases.length})
+                    </span>
+                    {tcLoading ? (
+                      <div className="flex items-center justify-center py-6 text-muted-foreground">
+                        <Loader2 className="h-4 w-4 animate-spin" />
+                      </div>
+                    ) : existingTestCases.length === 0 ? (
+                      <p className="py-3 text-center text-xs text-muted-foreground rounded-lg border border-dashed border-border/60">
+                        No test cases yet. Add some below.
+                      </p>
+                    ) : (
+                      existingTestCases.map((tc, i) => {
+                        const isEditing = editingTcId === tc._id;
+                        return (
+                          <div key={tc._id} className="rounded-lg border border-border/60 bg-card/40 p-3 space-y-2">
+                            <div className="flex items-center justify-between">
+                              <span className="text-xs font-semibold text-muted-foreground">
+                                Test Case {i + 1}
+                                {isEditing ? (
+                                  <label className="ml-3 inline-flex items-center gap-1.5 cursor-pointer select-none align-middle font-normal">
+                                    <Switch
+                                      checked={editDraft.hidden}
+                                      onCheckedChange={(v) => setEditDraft((d) => ({ ...d, hidden: v }))}
+                                    />
+                                    <span>Hidden</span>
+                                  </label>
+                                ) : (
+                                  <span className="ml-2 font-normal">{tc.hidden ? "(hidden)" : "(sample)"}</span>
+                                )}
+                              </span>
+                              <div className="flex items-center gap-1">
+                                {isEditing ? (
+                                  <>
+                                    <Button
+                                      type="button" size="sm" variant="ghost" className="h-7 px-2 text-xs"
+                                      onClick={cancelEditTestCase} disabled={tcUpdating}
+                                    >
+                                      Cancel
+                                    </Button>
+                                    <Button
+                                      type="button" size="sm" className="h-7 px-2 text-xs gradient-primary text-primary-foreground"
+                                      onClick={saveEditTestCase} disabled={tcUpdating}
+                                    >
+                                      {tcUpdating ? "Saving..." : "Save"}
+                                    </Button>
+                                  </>
+                                ) : (
+                                  <>
+                                    <Button
+                                      type="button" size="sm" variant="ghost"
+                                      className="h-7 w-7 p-0 text-muted-foreground hover:text-foreground"
+                                      onClick={() => startEditTestCase(tc)} title="Edit test case"
+                                    >
+                                      <Pencil className="h-3.5 w-3.5" />
+                                    </Button>
+                                    <Button
+                                      type="button" size="sm" variant="ghost"
+                                      className="h-7 w-7 p-0 text-muted-foreground hover:text-destructive"
+                                      onClick={() => deleteExistingTestCase(tc._id)} title="Delete test case"
+                                    >
+                                      <Trash2 className="h-3.5 w-3.5" />
+                                    </Button>
+                                  </>
+                                )}
+                              </div>
+                            </div>
+                            <div className="grid gap-2 md:grid-cols-2">
+                              <div className="space-y-1">
+                                <span className="text-[10px] uppercase tracking-wide text-muted-foreground">Input</span>
+                                {isEditing ? (
+                                  <Textarea
+                                    value={editDraft.input}
+                                    onChange={(e) => setEditDraft((d) => ({ ...d, input: e.target.value }))}
+                                    className="min-h-18 font-mono text-xs resize-y"
+                                  />
+                                ) : (
+                                  <pre className="max-h-32 overflow-auto rounded bg-secondary/40 p-2 font-mono text-xs whitespace-pre-wrap wrap-break-word">{tc.input}</pre>
+                                )}
+                              </div>
+                              <div className="space-y-1">
+                                <span className="text-[10px] uppercase tracking-wide text-muted-foreground">Expected Output</span>
+                                {isEditing ? (
+                                  <Textarea
+                                    value={editDraft.expectedOutput}
+                                    onChange={(e) => setEditDraft((d) => ({ ...d, expectedOutput: e.target.value }))}
+                                    className="min-h-18 font-mono text-xs resize-y"
+                                  />
+                                ) : (
+                                  <pre className="max-h-32 overflow-auto rounded bg-secondary/40 p-2 font-mono text-xs whitespace-pre-wrap wrap-break-word">{tc.expectedOutput}</pre>
+                                )}
+                              </div>
+                            </div>
+                          </div>
+                        );
+                      })
+                    )}
+                  </div>
+
+                  {/* New test cases to append */}
+                  <div className="rounded-lg border border-border/60 p-3">
+                    <TestCasesEditor
+                      testCases={newTestCases}
+                      onChange={setNewTestCases}
+                    />
+                  </div>
+
+                  <DialogFooter>
+                    <Button type="button" variant="outline" onClick={() => setTcDialogOpen(false)} disabled={tcSaving}>Close</Button>
+                    <Button
+                      type="button"
+                      className="gradient-primary text-primary-foreground"
+                      onClick={addTestCasesToProblem}
+                      disabled={tcSaving || newTestCases.length === 0}
+                    >
+                      {tcSaving ? "Saving..." : `Add ${newTestCases.length || ""} test case(s)`}
+                    </Button>
+                  </DialogFooter>
+                </div>
+              </DialogContent>
+            </Dialog>
+
+            {/* ── Delete problem confirmation ── */}
+            <AlertDialog open={!!deleteTarget} onOpenChange={(open) => { if (!open) setDeleteTarget(null); }}>
+              <AlertDialogContent>
+                <AlertDialogHeader>
+                  <AlertDialogTitle>Delete this problem?</AlertDialogTitle>
+                  <AlertDialogDescription>
+                    This permanently deletes <span className="font-semibold text-foreground">{deleteTarget?.title}</span> and
+                    all of its test cases. This action cannot be undone.
+                  </AlertDialogDescription>
+                </AlertDialogHeader>
+                <AlertDialogFooter>
+                  <AlertDialogCancel disabled={deleting}>Cancel</AlertDialogCancel>
+                  <AlertDialogAction
+                    onClick={(e) => { e.preventDefault(); confirmDeleteProblem(); }}
+                    disabled={deleting}
+                    className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+                  >
+                    {deleting ? "Deleting..." : "Delete problem"}
+                  </AlertDialogAction>
+                </AlertDialogFooter>
+              </AlertDialogContent>
+            </AlertDialog>
 
             {/* ── Contest create dialog ── */}
             <Dialog open={contestDialogOpen} onOpenChange={setContestDialogOpen}>

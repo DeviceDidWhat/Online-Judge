@@ -33,7 +33,7 @@ const getProfile = asyncHandler(async (req, res) => {
   }
 
   const [recentSubmissions, ratingHistory] = await Promise.all([
-    Submission.find({ user: user._id }).select('-sourceCode').populate('problem', 'problemId slug title difficulty').sort({ submittedAt: -1 }).limit(10),
+    Submission.find({ user: user._id }).select('-sourceCode -testcaseResults -failedTestcase -stdout -stderr -compileOutput').populate('problem', 'problemId slug title difficulty').sort({ submittedAt: -1 }).limit(10),
     RatingHistory.find({ user: user._id }).sort({ createdAt: 1 }).limit(50),
   ]);
 

@@ -1,5 +1,6 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { formatDistanceToNow } from "date-fns";
+import { toast } from "sonner";
 import { AppShell } from "@/components/app-shell";
 import { Card } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -27,8 +28,11 @@ function Submissions() {
       .then((data) => {
         if (!cancelled) setRows(data.submissions);
       })
-      .catch(() => {
-        if (!cancelled) setRows([]);
+      .catch((error) => {
+        if (!cancelled) {
+          setRows([]);
+          toast.error(error instanceof Error ? error.message : "Unable to load submissions");
+        }
       })
       .finally(() => {
         if (!cancelled) setLoadingRows(false);
@@ -46,7 +50,7 @@ function Submissions() {
     );
   }
 
-  const filtered = rows.filter((s) => s.problemTitle.toLowerCase().includes(q.toLowerCase()));
+  const filtered = rows.filter((s) => (s.problemTitle ?? "").toLowerCase().includes(q.toLowerCase()));
 
   return (
     <AppShell>

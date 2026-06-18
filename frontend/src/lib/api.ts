@@ -84,6 +84,7 @@ export type ApiSubmission = {
     expectedOutput?: string;
     actualOutput?: string;
     index?: number;
+    hidden?: boolean;
   };
   submittedAt: string;
   judgedAt?: string;
@@ -140,12 +141,21 @@ export type ApiProblem = {
   hints: string[];
   starterCode?: Record<string, string>;
   testCases?: Array<{ input: string; expectedOutput: string; hidden?: boolean; order?: number }>;
+  testCaseCount?: number;
   timeLimitMs: number;
   memoryLimitMb: number;
   totalSubmissions: number;
   acceptedSubmissions: number;
   solved?: boolean;
   progress?: ApiProblemProgress;
+};
+
+export type ApiTestCase = {
+  _id: string;
+  input: string;
+  expectedOutput: string;
+  hidden: boolean;
+  order: number;
 };
 
 export type ApiProblemProgress = {
