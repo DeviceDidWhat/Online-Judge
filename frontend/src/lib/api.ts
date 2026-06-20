@@ -71,6 +71,9 @@ export type ApiSubmission = {
     difficulty: ApiDifficulty;
   };
   language: string;
+  // Only returned by the single-submission endpoint (GET /submissions/:id), and
+  // only to the owner or an admin. The list endpoints omit it.
+  sourceCode?: string;
   verdict: ApiVerdict;
   runtime?: number;
   memory?: number;

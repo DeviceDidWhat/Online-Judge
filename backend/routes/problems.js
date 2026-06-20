@@ -1,8 +1,17 @@
 const express = require('express');
 const controller = require('../controllers/problemController');
 const { optionalAccessToken, verifyAccessToken, requireRole } = require('../middlewares/auth');
+const { rateLimit } = require('../middlewares/rateLimit');
 
 const router = express.Router();
+
+// The "Run" button executes code in Docker; throttle per user on top of the
+// in-process concurrency limiter in the controller.
+const runLimiter = rateLimit({
+  windowMs: Number(process.env.RUN_RATE_WINDOW_MS || 60_000),
+  max: Number(process.env.RUN_RATE_MAX || 30),
+  message: 'Too many run requests, please slow down.',
+});
 
 router.get('/', optionalAccessToken, controller.listProblems);
 router.post('/', verifyAccessToken, requireRole('admin'), controller.createProblem);
@@ -18,6 +27,6 @@ router.delete('/:slug/testcases/:testCaseId', verifyAccessToken, requireRole('ad
 router.get('/:slug/progress', verifyAccessToken, controller.getProblemProgress);
 router.post('/:slug/bookmark', verifyAccessToken, controller.toggleBookmark);
 router.put('/:slug/saved-code', verifyAccessToken, controller.saveCode);
-router.post('/:slug/run', verifyAccessToken, controller.runCustom);
+router.post('/:slug/run', verifyAccessToken, runLimiter, controller.runCustom);
 
 module.exports = router;

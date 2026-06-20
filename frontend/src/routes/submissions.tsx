@@ -5,6 +5,7 @@ import { AppShell } from "@/components/app-shell";
 import { Card } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { VerdictBadge } from "@/components/verdict-badge";
+import { ViewCodeButton } from "@/components/view-code-button";
 import { apiRequest, type ApiSubmission } from "@/lib/api";
 import { useRequireAuth } from "@/lib/auth";
 import { useEffect, useState } from "react";
@@ -65,7 +66,7 @@ function Submissions() {
         <Card className="overflow-hidden border-border/60">
           <table className="w-full text-sm">
             <thead className="bg-secondary/40 text-left text-xs uppercase tracking-wide text-muted-foreground">
-              <tr><th className="px-4 py-3">Problem</th><th className="px-4 py-3">Verdict</th><th className="px-4 py-3">Language</th><th className="px-4 py-3">Runtime</th><th className="px-4 py-3">Memory</th><th className="px-4 py-3">When</th></tr>
+              <tr><th className="px-4 py-3">Problem</th><th className="px-4 py-3">Verdict</th><th className="px-4 py-3">Language</th><th className="px-4 py-3">Runtime</th><th className="px-4 py-3">Memory</th><th className="px-4 py-3">When</th><th className="px-4 py-3 text-right">Code</th></tr>
             </thead>
             <tbody>
               {filtered.map((s) => (
@@ -76,6 +77,9 @@ function Submissions() {
                   <td className="px-4 py-3 font-mono text-xs">{s.runtime ?? 0} ms</td>
                   <td className="px-4 py-3 font-mono text-xs">{s.memory ?? 0} MB</td>
                   <td className="px-4 py-3 text-xs text-muted-foreground">{formatDistanceToNow(new Date(s.submittedAt))} ago</td>
+                  <td className="px-4 py-3 text-right">
+                    <ViewCodeButton submissionId={s.submissionId} language={s.language} problemTitle={s.problemTitle} />
+                  </td>
                 </tr>
               ))}
             </tbody>

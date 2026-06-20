@@ -20,6 +20,7 @@ import {
 import { useAuth } from "@/lib/auth";
 import { toast } from "sonner";
 import { VerdictBadge } from "@/components/verdict-badge";
+import { ViewCodeButton } from "@/components/view-code-button";
 import { useContestLeaderboard } from "@/hooks/use-contest-leaderboard";
 import { useSubmissionStatus } from "@/hooks/use-submission-status";
 import { getSocket } from "@/lib/socket";
@@ -744,6 +745,11 @@ function ContestDetail() {
                     </div>
                     <div className="flex items-center gap-2">
                       <VerdictBadge verdict={sub.verdict} />
+                      <ViewCodeButton
+                        submissionId={sub.submissionId}
+                        language={sub.language}
+                        problemTitle={sub.problem?.title ?? sub.problemTitle}
+                      />
                     </div>
                   </div>
                 ))}

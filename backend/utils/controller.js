@@ -35,4 +35,19 @@ const isObjectId = (value) => mongoose.Types.ObjectId.isValid(value);
 
 const escapeRegExp = (value) => String(value).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
-module.exports = { asyncHandler, parsePagination, paginated, isObjectId, escapeRegExp };
+// Cap submitted source code well below MongoDB's 16 MB per-document BSON limit (the
+// HTTP body parser allows far more). Bytes, not characters, so multi-byte input is
+// measured correctly. Returns true when the payload is too large to accept.
+const MAX_SOURCE_CODE_BYTES = Number(process.env.MAX_SOURCE_CODE_BYTES || 256 * 1024);
+const sourceCodeTooLarge = (sourceCode) =>
+  typeof sourceCode === 'string' && Buffer.byteLength(sourceCode, 'utf8') > MAX_SOURCE_CODE_BYTES;
+
+module.exports = {
+  asyncHandler,
+  parsePagination,
+  paginated,
+  isObjectId,
+  escapeRegExp,
+  MAX_SOURCE_CODE_BYTES,
+  sourceCodeTooLarge,
+};

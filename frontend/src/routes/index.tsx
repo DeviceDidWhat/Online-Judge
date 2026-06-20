@@ -97,7 +97,7 @@ function Landing() {
             initial={{ opacity: 0 }} animate={{ opacity: 1 }} transition={{ duration: 0.6, delay: 0.15 }}
             className="mx-auto mt-6 max-w-2xl text-balance text-lg text-muted-foreground"
           >
-            A modern online judge with 3,000+ curated problems, weekly contests, and a real-time leaderboard.
+            A modern online judge with problems, weekly contests, and a real-time leaderboard.
             Built for engineers who want to ship — and win.
           </motion.p>
           <motion.div

@@ -2,7 +2,16 @@ const Problem = require('../models/problem');
 const Contest = require('../models/contest');
 const TestCase = require('../models/testCase');
 const UserProblemProgress = require('../models/userProblemProgress');
-const { asyncHandler, parsePagination, escapeRegExp, isObjectId } = require('../utils/controller');
+const { asyncHandler, parsePagination, escapeRegExp, isObjectId, sourceCodeTooLarge, MAX_SOURCE_CODE_BYTES } = require('../utils/controller');
+const Semaphore = require('../utils/semaphore');
+
+// The "Run" button executes arbitrary code in Docker synchronously in the API
+// process (it does NOT go through the judge queue). Without a cap, concurrent
+// requests would spawn unbounded containers and exhaust the host. Limit how many
+// run at once and shed excess load with a 503 rather than queueing without bound.
+const RUN_CONCURRENCY = Number(process.env.JUDGE_RUN_CONCURRENCY || 2);
+const RUN_MAX_PENDING = Number(process.env.JUDGE_RUN_MAX_PENDING || 10);
+const runSemaphore = new Semaphore(RUN_CONCURRENCY, RUN_MAX_PENDING);
 
 // Returns true if the problem is accessible in a live or ended contest
 const isAccessibleViaContest = (problemId) =>
@@ -70,24 +79,39 @@ const addUserProgress = async (problems, userId) => {
 
 const listProblems = asyncHandler(async (req, res) => {
   const { page, limit, skip } = parsePagination(req.query, { limit: 30 });
+  const isAdmin = req.user?.role === 'admin';
   const filter = {};
+  // Conditions that must all hold, collected here so the visibility OR and the
+  // search OR can be combined safely via $and (two bare $or keys would clobber).
+  const and = [];
 
   if (req.query.status) {
     filter.status = req.query.status;
-  } else if (req.user?.role !== 'admin') {
+  } else if (!isAdmin) {
     filter.status = 'published';
   }
-  if (req.user?.role !== 'admin') {
-    filter.visibility = { $ne: 'contest_only' };
+  if (!isAdmin) {
+    // Contest-only problems are hidden from the general list until the contest
+    // they belonged to has ended — after that they become regular practice
+    // problems that everyone can browse. (The detail page already grants access
+    // for ended contests via isAccessibleViaContest.)
+    const endedContestProblemIds = await Contest.distinct('problems.problem', { status: 'ended' });
+    and.push({
+      $or: [
+        { visibility: { $ne: 'contest_only' } },
+        { visibility: 'contest_only', _id: { $in: endedContestProblemIds } },
+      ],
+    });
   }
   if (req.query.difficulty) filter.difficulty = req.query.difficulty;
   if (req.query.tag) filter.tags = req.query.tag;
   if (req.query.q) {
     const regex = new RegExp(escapeRegExp(req.query.q), 'i');
-    filter.$or = [{ title: regex }, { slug: regex }, { tags: regex }];
+    and.push({ $or: [{ title: regex }, { slug: regex }, { tags: regex }] });
   }
+  if (and.length) filter.$and = and;
 
-  const select = req.user?.role === 'admin' ? '' : publicProblemSelect;
+  const select = isAdmin ? '' : publicProblemSelect;
   const [problems, total] = await Promise.all([
     Problem.find(filter).select(select).sort({ problemId: 1 }).skip(skip).limit(limit),
     Problem.countDocuments(filter),
@@ -214,6 +238,9 @@ const saveCode = asyncHandler(async (req, res) => {
 const runCustom = asyncHandler(async (req, res) => {
   const { language, sourceCode, input = '' } = req.body;
   if (!language || !sourceCode) return res.status(400).json({ message: 'Language and sourceCode are required' });
+  if (sourceCodeTooLarge(sourceCode)) {
+    return res.status(413).json({ message: `Source code exceeds the ${Math.floor(MAX_SOURCE_CODE_BYTES / 1024)} KB limit` });
+  }
 
   const problem = await Problem.findOne({ slug: req.params.slug }).select('timeLimitMs memoryLimitMb visibility status');
   if (!problem) return res.status(404).json({ message: 'Problem not found' });
@@ -226,13 +253,22 @@ const runCustom = asyncHandler(async (req, res) => {
   }
 
   const judgeRunner = require('../services/judgeRunner');
-  const result = await judgeRunner.runCode({
-    language,
-    sourceCode,
-    input,
-    timeLimitMs: problem.timeLimitMs || 1000,
-    memoryLimitMb: problem.memoryLimitMb || 256,
-  });
+  let result;
+  try {
+    result = await runSemaphore.run(() => judgeRunner.runCode({
+      language,
+      sourceCode,
+      input,
+      timeLimitMs: problem.timeLimitMs || 1000,
+      memoryLimitMb: problem.memoryLimitMb || 256,
+    }));
+  } catch (err) {
+    if (err.code === 'CAPACITY') {
+      res.setHeader('Retry-After', '5');
+      return res.status(503).json({ message: 'The runner is busy right now. Please try again in a moment.' });
+    }
+    throw err;
+  }
 
   res.json({ result });
 });

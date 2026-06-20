@@ -3,14 +3,19 @@ const Problem = require('../models/problem');
 const TestCase = require('../models/testCase');
 const Submission = require('../models/submission');
 const JudgeJob = require('../models/judgeJob');
-const { asyncHandler, parsePagination, isObjectId } = require('../utils/controller');
+const Contest = require('../models/contest');
+const { asyncHandler, parsePagination, isObjectId, sourceCodeTooLarge, MAX_SOURCE_CODE_BYTES } = require('../utils/controller');
 const { applySubmissionResult } = require('../services/submissionResultService');
 const { enqueueJudgeJob } = require('../services/judgeQueue');
 const { bumpProblemStats } = require('../utils/problemStats');
 
-const canAccessSubmission = (req, submission) => (
-  req.user.role === 'admin' || submission.user.toString() === req.user.id
-);
+const canAccessSubmission = (req, submission) => {
+  if (req.user.role === 'admin') return true;
+  // `submission.user` may be a populated User document (then its _id is the owner)
+  // or a raw ObjectId. Normalise both to the id string before comparing.
+  const ownerId = submission.user?._id ?? submission.user;
+  return ownerId != null && ownerId.toString() === req.user.id;
+};
 
 const listSubmissions = asyncHandler(async (req, res) => {
   const { page, limit, skip } = parsePagination(req.query, { limit: 20 });
@@ -42,6 +47,9 @@ const listSubmissions = asyncHandler(async (req, res) => {
 const createSubmission = asyncHandler(async (req, res) => {
   const { problemSlug, problemId, problem, language, sourceCode } = req.body;
   if (!language || !sourceCode) return res.status(400).json({ message: 'Language and sourceCode are required' });
+  if (sourceCodeTooLarge(sourceCode)) {
+    return res.status(413).json({ message: `Source code exceeds the ${Math.floor(MAX_SOURCE_CODE_BYTES / 1024)} KB limit` });
+  }
 
   const problemQuery = [
     ...(problem && isObjectId(problem) ? [{ _id: problem }] : []),
@@ -54,6 +62,18 @@ const createSubmission = asyncHandler(async (req, res) => {
   if (!foundProblem) return res.status(404).json({ message: 'Problem not found' });
   if (foundProblem.status !== 'published' && req.user.role !== 'admin') {
     return res.status(403).json({ message: 'Problem is not available for submissions' });
+  }
+
+  // A problem that is part of a currently-live contest must only be submitted
+  // through the contest endpoint (POST /contests/:id/submit), so the attempt is
+  // scored against the contest and registration is enforced. Block the normal
+  // path during the live window; upsolving via this endpoint is fine once the
+  // contest has ended. Admins are exempt (testing/rejudge).
+  if (req.user.role !== 'admin') {
+    const inLiveContest = await Contest.exists({ 'problems.problem': foundProblem._id, status: 'live' });
+    if (inLiveContest) {
+      return res.status(403).json({ message: 'This problem is part of a live contest — submit through the contest.' });
+    }
   }
 
   const totalTestcases = await TestCase.countDocuments({ problem: foundProblem._id });
@@ -72,7 +92,14 @@ const createSubmission = asyncHandler(async (req, res) => {
     JudgeJob.create({ submission: submission._id }),
     bumpProblemStats(foundProblem._id, { total: 1 }),
   ]);
-  await enqueueJudgeJob(judgeJob._id, { priority: judgeJob.priority });
+  // A failed enqueue must not orphan the submission. It stays Pending and the
+  // judge worker's periodic recovery sweep (services/judgeRecovery.js) re-enqueues
+  // it, so we still acknowledge the submission instead of surfacing a 500.
+  try {
+    await enqueueJudgeJob(judgeJob._id, { priority: judgeJob.priority });
+  } catch (err) {
+    console.error('[createSubmission] enqueue failed; recovery will retry:', err.message);
+  }
 
   res.status(201).json({ submission });
 });

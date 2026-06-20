@@ -23,6 +23,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { ViewCodeButton } from "@/components/view-code-button";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -783,7 +784,7 @@ function Admin() {
                     <div className="p-5"><h3 className="font-semibold">Recent judge jobs</h3></div>
                     <table className="w-full text-sm">
                       <thead className="bg-secondary/40 text-left text-xs uppercase tracking-wide text-muted-foreground">
-                        <tr><th className="px-4 py-3">Status</th><th className="px-4 py-3">Submission</th><th className="px-4 py-3">Worker</th><th className="px-4 py-3">Attempts</th></tr>
+                        <tr><th className="px-4 py-3">Status</th><th className="px-4 py-3">Submission</th><th className="px-4 py-3">Worker</th><th className="px-4 py-3">Attempts</th><th className="px-4 py-3 text-right">Code</th></tr>
                       </thead>
                       <tbody>
                         {jobs.map((job) => (
@@ -792,9 +793,14 @@ function Admin() {
                             <td className="px-4 py-3 text-xs text-muted-foreground">{job.submission?.submissionId ?? "-"}</td>
                             <td className="px-4 py-3 text-xs text-muted-foreground">{job.worker?.workerId ?? "-"}</td>
                             <td className="px-4 py-3 font-mono text-xs">{job.attempts}</td>
+                            <td className="px-4 py-3 text-right">
+                              {job.submission?.submissionId
+                                ? <ViewCodeButton submissionId={job.submission.submissionId} language={job.submission.language} problemTitle={job.submission.problemTitle} />
+                                : <span className="text-xs text-muted-foreground">-</span>}
+                            </td>
                           </tr>
                         ))}
-                        {!loadingProblems && jobs.length === 0 && <tr><td colSpan={4} className="px-4 py-8 text-center text-muted-foreground">No judge jobs.</td></tr>}
+                        {!loadingProblems && jobs.length === 0 && <tr><td colSpan={5} className="px-4 py-8 text-center text-muted-foreground">No judge jobs.</td></tr>}
                       </tbody>
                     </table>
                   </Card>

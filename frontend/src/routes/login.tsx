@@ -1,6 +1,7 @@
 import { createFileRoute, Link, useNavigate } from "@tanstack/react-router";
 import { motion } from "motion/react";
-import { Code2, Loader2 } from "lucide-react";
+import { Loader2 } from "lucide-react";
+import logo from "@/lib/Logo.png";
 import { useEffect, useState, type FormEvent } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -48,9 +49,7 @@ function Login() {
         <div className="absolute inset-0 gradient-hero" />
         <div className="relative flex h-full flex-col justify-between p-10">
           <Link to="/" className="flex items-center gap-2 text-lg font-semibold">
-            <div className="grid h-9 w-9 place-items-center rounded-lg gradient-primary shadow-glow">
-              <Code2 className="h-5 w-5 text-primary-foreground" />
-            </div>
+            <img src={logo} alt="CodeArena logo" style={{ width: 42, height: 42 }} className="object-contain" />
             CodeArena
           </Link>
           <div>

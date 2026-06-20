@@ -9,7 +9,7 @@ const { enqueueJudgeJob } = require('../services/judgeQueue');
 const { bumpProblemStats } = require('../utils/problemStats');
 const { scheduleContestLifecycle, cancelContestLifecycle } = require('../services/contestQueue');
 const { finalizeContest } = require('../services/contestService');
-const { asyncHandler, parsePagination, escapeRegExp, isObjectId } = require('../utils/controller');
+const { asyncHandler, parsePagination, escapeRegExp, isObjectId, sourceCodeTooLarge, MAX_SOURCE_CODE_BYTES } = require('../utils/controller');
 const { getIO } = require('../socket');
 
 const contestLookup = (id) => {
@@ -207,6 +207,9 @@ const submitToContest = asyncHandler(async (req, res) => {
   if (!language || !sourceCode) {
     return res.status(400).json({ message: 'language and sourceCode are required' });
   }
+  if (sourceCodeTooLarge(sourceCode)) {
+    return res.status(413).json({ message: `Source code exceeds the ${Math.floor(MAX_SOURCE_CODE_BYTES / 1024)} KB limit` });
+  }
   if (!problemLabel) {
     return res.status(400).json({ message: 'problemLabel is required (e.g. "A", "B")' });
   }
@@ -240,7 +243,14 @@ const submitToContest = asyncHandler(async (req, res) => {
     JudgeJob.create({ submission: submission._id }),
     bumpProblemStats(problem._id, { total: 1 }),
   ]);
-  await enqueueJudgeJob(judgeJob._id, { priority: judgeJob.priority });
+  // A failed enqueue must not orphan the submission (which would also defer contest
+  // finalization indefinitely). It stays Pending and the judge worker's recovery
+  // sweep (services/judgeRecovery.js) re-enqueues it, so we still acknowledge it.
+  try {
+    await enqueueJudgeJob(judgeJob._id, { priority: judgeJob.priority });
+  } catch (err) {
+    console.error('[submitToContest] enqueue failed; recovery will retry:', err.message);
+  }
 
   res.status(201).json({ submission });
 });

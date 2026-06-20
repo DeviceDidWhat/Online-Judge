@@ -12,6 +12,7 @@ import { ResizableHandle, ResizablePanel, ResizablePanelGroup } from "@/componen
 import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle, SheetTrigger } from "@/components/ui/sheet";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { VerdictBadge } from "@/components/verdict-badge";
+import { ViewCodeButton } from "@/components/view-code-button";
 import { apiRequest, type ApiLanguage, type ApiProblem, type ApiProblemProgress, type ApiSubmission, type ApiVerdict, type ApiDiscussion } from "@/lib/api";
 import { difficultyClass } from "@/lib/mock-data";
 import { toast } from "sonner";
@@ -478,7 +479,10 @@ function ProblemDetail() {
                       <div><div className="text-muted-foreground">Runtime</div><div className="font-mono">{submission.runtime ?? 0} ms</div></div>
                       <div><div className="text-muted-foreground">Memory</div><div className="font-mono">{submission.memory ?? 0} MB</div></div>
                     </div>
-                    <div className="mt-1 text-[10px] text-muted-foreground font-mono">{submission.submittedAt?.replace("T", " ").slice(0, 16) ?? "—"}</div>
+                    <div className="mt-2 flex items-center justify-between">
+                      <span className="text-[10px] text-muted-foreground font-mono">{submission.submittedAt?.replace("T", " ").slice(0, 16) ?? "—"}</span>
+                      <ViewCodeButton submissionId={submission.submissionId} language={submission.language} problemTitle={problem.title} />
+                    </div>
                   </div>
                 ))}
               </div>
@@ -557,7 +561,10 @@ function ProblemDetail() {
                       <VerdictBadge verdict={submission.verdict} />
                       <span className="text-xs text-muted-foreground font-mono">{formatLanguage(languages, submission.language)}</span>
                     </div>
-                    <div className="text-xs text-muted-foreground font-mono">{submission.runtime ?? 0}ms / {submission.memory ?? 0}MB</div>
+                    <div className="flex items-center gap-3">
+                      <div className="text-xs text-muted-foreground font-mono">{submission.runtime ?? 0}ms / {submission.memory ?? 0}MB</div>
+                      <ViewCodeButton submissionId={submission.submissionId} language={submission.language} problemTitle={problem.title} />
+                    </div>
                   </div>
                 ))}
                 {submissions.length === 0 && <p className="text-sm text-muted-foreground">No submissions yet.</p>}

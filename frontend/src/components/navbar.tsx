@@ -1,9 +1,10 @@
 import { Link, useNavigate, useRouterState } from "@tanstack/react-router";
-import { Bell, Code2, LogOut, Menu, Moon, Search, Sun, User } from "lucide-react";
+import { Bell, LogOut, Menu, Moon, Search, Sun, User } from "lucide-react";
 import { useEffect, useState, type FormEvent } from "react";
 import { formatDistanceToNow } from "date-fns";
 import { useTheme } from "@/lib/theme";
 import { useAuth } from "@/lib/auth";
+import logo from "@/lib/Logo.png";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
@@ -95,9 +96,9 @@ export function Navbar({ onToggleSidebar }: { onToggleSidebar?: () => void }) {
           </Button>
         )}
         <Link to="/" className="flex items-center gap-2 font-semibold">
-          <div className="grid h-8 w-8 place-items-center rounded-lg gradient-primary shadow-glow">
-            <Code2 className="h-4 w-4 text-primary-foreground" />
-          </div>
+          <span className="relative h-14 w-14 flex-none overflow-visible">
+            <img src={logo} alt="CodeArena logo" style={{ width: 84, height: 84 }} className="absolute left-[5%] top-[60%] -translate-x-1/2 -translate-y-1/2 object-contain" />
+          </span>
           <span className="text-base tracking-tight">CodeArena</span>
         </Link>
 
