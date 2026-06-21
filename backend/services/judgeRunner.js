@@ -233,6 +233,11 @@ const runSubmission = async ({ submission, problem }) => {
   // cursor so only one case is held in memory at a time (large 1e5-sized inputs).
   const totalTestcases = await TestCase.countDocuments({ problem: problem._id });
   const workDir = await fs.mkdtemp(path.join(os.tmpdir(), 'judge-'));
+  // mkdtemp creates the dir as 0700 (owner-only). The containers run with
+  // --cap-drop ALL, so even their root user lacks CAP_DAC_OVERRIDE and is bound
+  // by normal permission bits. Open the ephemeral workspace so the container's
+  // UID can traverse it (read source, write the compiled binary).
+  await fs.chmod(workDir, 0o777);
 
   try {
     await fs.writeFile(path.join(workDir, spec.file), submission.sourceCode, 'utf8');
@@ -350,6 +355,9 @@ const runCode = async ({ language, sourceCode, input = '', timeLimitMs = 1000, m
   if (!spec.file || !spec.run) throw new Error(`Incomplete language runner for: ${language}`);
 
   const workDir = await fs.mkdtemp(path.join(os.tmpdir(), 'judge-'));
+  // See runSubmission: open the workspace so the --cap-drop ALL container can
+  // access the bind-mounted files despite the host-owned 0700 default.
+  await fs.chmod(workDir, 0o777);
   try {
     await fs.writeFile(path.join(workDir, spec.file), sourceCode, 'utf8');
 
