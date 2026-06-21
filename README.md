@@ -54,12 +54,12 @@ The system is split into a **stateless API**, a **pool of judge workers**, and m
                 │  Caddy (auto-HTTPS reverse proxy)            │
                 └───────────────┬─────────────────────────────┘
                                 ▼
-                ┌─────────────────────────────────────────────┐
+                ┌───────────────────────────────────────────── ┐
                 │  API server (Express + Socket.IO)  [oj-web]  │
                 │  - REST routes / auth                        │
                 │  - enqueues judge jobs ──────────────┐       │
                 │  - Mongo change streams ─▶ Socket.IO │       │
-                └───────────────┬──────────────────────┼───────┘
+                └───────────────┬────────────────────── ┼───────┘
                                 │                       │
               MongoDB (Atlas) ◀─┘                       ▼
               replica set                        Redis (BullMQ queue)
