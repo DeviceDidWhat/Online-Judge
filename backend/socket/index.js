@@ -1,5 +1,6 @@
 const { Server } = require('socket.io');
 const jwt = require('jsonwebtoken');
+const { getAllowedOrigins } = require('../config/cors');
 
 let io = null;
 
@@ -10,7 +11,7 @@ let io = null;
 function initSocketIO(httpServer) {
   io = new Server(httpServer, {
     cors: {
-      origin: process.env.CLIENT_ORIGIN || 'http://localhost:8080',
+      origin: getAllowedOrigins(),
       credentials: true,
     },
   });

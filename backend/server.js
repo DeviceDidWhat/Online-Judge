@@ -5,6 +5,7 @@ const helmet = require('helmet');
 const cors = require('cors');
 const cookieParser = require('cookie-parser');
 const connectDB = require('./config/db');
+const { getAllowedOrigins } = require('./config/cors');
 const { initSocketIO } = require('./socket');
 const { startSubmissionWatcher } = require('./socket/submissionWatcher');
 const { startContestWatcher } = require('./socket/contestWatcher');
@@ -43,7 +44,7 @@ app.use((req, res, next) => {
 app.use(helmet());
 app.use(cookieParser());
 app.use(cors({
-  origin: process.env.CLIENT_ORIGIN || 'http://localhost:8080',
+  origin: getAllowedOrigins(),
   credentials: true
 }));
 

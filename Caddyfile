@@ -1,0 +1,17 @@
+# Caddy reverse proxy with automatic HTTPS (free Let's Encrypt certs).
+# This is what gives the API the HTTPS required for Secure / SameSite=None cookies.
+#
+# Prereqs:
+#   1. A domain (or free subdomain via DuckDNS/nip.io) with an A record -> this VM's IP.
+#   2. Ports 80 and 443 open in the VM firewall / cloud security list.
+#
+# Install (Ubuntu):  see DEPLOYMENT.md
+# Run:               sudo caddy run --config /etc/caddy/Caddyfile
+#                    (or `sudo systemctl reload caddy` after editing)
+#
+# Replace api.your-domain.com with your real API hostname. It must match the host
+# part of the frontend's VITE_API_URL.
+api.your-domain.com {
+    # Socket.IO websocket upgrades are proxied automatically by Caddy.
+    reverse_proxy localhost:5000
+}
