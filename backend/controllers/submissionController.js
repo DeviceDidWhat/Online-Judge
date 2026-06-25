@@ -77,6 +77,11 @@ const createSubmission = asyncHandler(async (req, res) => {
   }
 
   const totalTestcases = await TestCase.countDocuments({ problem: foundProblem._id });
+  // Acceptance is counted per-user, not per-submission: only the user's FIRST
+  // attempt at this problem bumps the total, so resubmitting (including the same
+  // correct code repeatedly) never inflates the rate. Checked before create so
+  // the new submission isn't what we detect.
+  const isFirstAttempt = !(await Submission.exists({ user: req.user.id, problem: foundProblem._id }));
   const submission = await Submission.create({
     submissionId: `sub_${Date.now()}_${crypto.randomBytes(4).toString('hex')}`,
     user: req.user.id,
@@ -88,10 +93,9 @@ const createSubmission = asyncHandler(async (req, res) => {
     verdict: 'Pending',
   });
 
-  const [judgeJob] = await Promise.all([
-    JudgeJob.create({ submission: submission._id }),
-    bumpProblemStats(foundProblem._id, { total: 1 }),
-  ]);
+  const tasks = [JudgeJob.create({ submission: submission._id })];
+  if (isFirstAttempt) tasks.push(bumpProblemStats(foundProblem._id, { total: 1 }));
+  const [judgeJob] = await Promise.all(tasks);
   // A failed enqueue must not orphan the submission. It stays Pending and the
   // judge worker's periodic recovery sweep (services/judgeRecovery.js) re-enqueues
   // it, so we still acknowledge the submission instead of surfacing a 500.

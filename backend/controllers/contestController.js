@@ -226,6 +226,9 @@ const submitToContest = asyncHandler(async (req, res) => {
   if (!problem) return res.status(404).json({ message: 'Problem not found' });
 
   const totalTestcases = await TestCase.countDocuments({ problem: problem._id });
+  // Acceptance is per-user (see submissionController): only the user's first
+  // attempt at this problem bumps the total. Checked before create.
+  const isFirstAttempt = !(await Submission.exists({ user: req.user.id, problem: problem._id }));
   const submission = await Submission.create({
     submissionId: `sub_${Date.now()}_${crypto.randomBytes(4).toString('hex')}`,
     user: req.user.id,
@@ -239,10 +242,9 @@ const submitToContest = asyncHandler(async (req, res) => {
     submittedAt: new Date(),
   });
 
-  const [judgeJob] = await Promise.all([
-    JudgeJob.create({ submission: submission._id }),
-    bumpProblemStats(problem._id, { total: 1 }),
-  ]);
+  const tasks = [JudgeJob.create({ submission: submission._id })];
+  if (isFirstAttempt) tasks.push(bumpProblemStats(problem._id, { total: 1 }));
+  const [judgeJob] = await Promise.all(tasks);
   // A failed enqueue must not orphan the submission (which would also defer contest
   // finalization indefinitely). It stays Pending and the judge worker's recovery
   // sweep (services/judgeRecovery.js) re-enqueues it, so we still acknowledge it.

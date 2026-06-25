@@ -26,13 +26,22 @@ const run = async () => {
   await mongoose.connect(uri);
   console.log('Connected to MongoDB');
 
-  // Group submissions by problem: total count and accepted count in one pass.
+  // Acceptance is counted PER USER, not per submission (so repeated correct
+  // submissions don't inflate it). Collapse each (problem, user) pair to one row
+  // first — solved=1 if that user ever got an AC — then count unique users and
+  // unique solvers per problem.
   const stats = await Submission.aggregate([
     {
       $group: {
-        _id: '$problem',
-        total: { $sum: 1 },
-        accepted: { $sum: { $cond: [{ $eq: ['$verdict', 'Accepted'] }, 1, 0] } },
+        _id: { problem: '$problem', user: '$user' },
+        solved: { $max: { $cond: [{ $eq: ['$verdict', 'Accepted'] }, 1, 0] } },
+      },
+    },
+    {
+      $group: {
+        _id: '$_id.problem',
+        total: { $sum: 1 },          // distinct users who attempted
+        accepted: { $sum: '$solved' }, // distinct users who solved
       },
     },
   ]);
