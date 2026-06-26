@@ -1,7 +1,8 @@
 import { createFileRoute, Link } from "@tanstack/react-router";
 import { useEffect, useMemo, useRef, useState, type FormEvent } from "react";
 import Editor from "@monaco-editor/react";
-import { ArrowLeft, Bookmark, History, Lightbulb, Play, RotateCcw, Send, Terminal, MessageCircle, Plus, ThumbsUp, HelpCircle } from "lucide-react";
+import { ArrowLeft, Bookmark, History, Lightbulb, Play, RotateCcw, Send, Terminal, MessageCircle, Plus, ThumbsUp, HelpCircle, Sparkles } from "lucide-react";
+import { AiReviewPanel } from "@/components/ai-review-panel";
 import { Navbar } from "@/components/navbar";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -111,6 +112,7 @@ function ProblemDetail() {
   const [languages, setLanguages] = useState<ApiLanguage[]>(fallbackLanguages);
   const [lang, setLang] = useState(fallbackLanguages[0].languageId);
   const [code, setCode] = useState("");
+  const [aiOpen, setAiOpen] = useState(false);
   const [fontSize, setFontSize] = useState(14);
   const [loadingProblem, setLoadingProblem] = useState(true);
   const [submitting, setSubmitting] = useState(false);
@@ -492,6 +494,14 @@ function ProblemDetail() {
             <Bookmark className="h-4 w-4" />
           </Button>
           <div className="h-5 w-px bg-border" />
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => setAiOpen(true)}
+            className="gap-1.5 border-violet-500/40 bg-violet-500/10 text-violet-300 hover:bg-violet-500/20 hover:text-violet-200"
+          >
+            <Sparkles className="h-3.5 w-3.5" /> AI
+          </Button>
           <Button variant="outline" size="sm" onClick={onRun} disabled={submitting}>
             <Play className="mr-1.5 h-3.5 w-3.5" /> Run
           </Button>
@@ -702,6 +712,8 @@ function ProblemDetail() {
           </ResizablePanelGroup>
         </ResizablePanel>
       </ResizablePanelGroup>
+
+      <AiReviewPanel open={aiOpen} onOpenChange={setAiOpen} slug={slug} language={lang} code={code} />
 
       <Dialog open={showResult} onOpenChange={setShowResult}>
         <DialogContent className="sm:max-w-md">
