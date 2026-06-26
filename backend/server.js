@@ -9,6 +9,7 @@ const { getAllowedOrigins } = require('./config/cors');
 const { initSocketIO } = require('./socket');
 const { startSubmissionWatcher } = require('./socket/submissionWatcher');
 const { startContestWatcher } = require('./socket/contestWatcher');
+const aiRoutes = require('./routes/ai');
 const authRoutes = require('./routes/auth');
 const contestRoutes = require('./routes/contests');
 const dashboardRoutes = require('./routes/dashboard');
@@ -70,6 +71,7 @@ app.use((req, res, next) => {
 app.use(bodyParser.urlencoded({ limit: '100mb', extended: true }));
 
 // Mount routes AFTER body parsers
+app.use('/api/ai', aiRoutes);
 app.use('/api/auth', authRoutes);
 app.use('/api/contests', contestRoutes);
 app.use('/api/dashboard', dashboardRoutes);

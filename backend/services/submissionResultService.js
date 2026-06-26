@@ -1,5 +1,6 @@
 const Submission = require('../models/submission');
 const ContestRegistration = require('../models/contestRegistration');
+const UserProblemProgress = require('../models/userProblemProgress');
 const { updateProgressForSubmission } = require('../utils/problemProgress');
 const { bumpProblemStats } = require('../utils/problemStats');
 const { updateContestScore } = require('./contestService');
@@ -44,7 +45,18 @@ const applySubmissionResult = async (submissionId, result) => {
   });
 
   if (submission.verdict === 'Accepted' && !wasAccepted) {
-    await bumpProblemStats(submission.problem, { accepted: 1 });
+    // Count acceptance per-user: only the user's FIRST solve of this problem bumps
+    // the accepted counter, so repeated correct submissions don't inflate the rate.
+    // The progress doc still reflects the pre-this-submission state here, because
+    // updateProgressForSubmission (below) runs after this.
+    const alreadySolved = await UserProblemProgress.exists({
+      user: submission.user,
+      problem: submission.problem,
+      status: 'solved',
+    });
+    if (!alreadySolved) {
+      await bumpProblemStats(submission.problem, { accepted: 1 });
+    }
   }
 
   if (wasPending) {

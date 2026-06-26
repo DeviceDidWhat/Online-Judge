@@ -3,6 +3,11 @@ const jwt = require('jsonwebtoken');
 const User = require('../models/user');
 const { createAccessToken, createRefreshToken } = require('../utils/token');
 
+// Basic sanity check: non-empty local part, a single @, and a domain with a dot.
+// Cheap guard so obviously-invalid addresses (e.g. "asdf") can't register. A full
+// email-verification flow (confirmation link) is planned for V2.
+const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
 const buildAuthPayload = (user) => ({
   id: user._id.toString(),
   email: user.email,
@@ -34,6 +39,10 @@ const register = async (req, res) => {
 
     if (!username || !email || !password) {
       return res.status(400).json({ message: 'Username, email, and password are required' });
+    }
+
+    if (!EMAIL_REGEX.test(String(email).trim())) {
+      return res.status(400).json({ message: 'Please provide a valid email address' });
     }
 
     if (!country) {

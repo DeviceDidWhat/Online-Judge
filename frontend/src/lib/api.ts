@@ -354,3 +354,38 @@ export async function apiRequest<T>(path: string, options: RequestInit = {}): Pr
 
   return data as T;
 }
+
+// ── AI Assistant (Gemini-backed) ─────────────────────────────────────────────
+export type AiCodeQuality = "Poor" | "Okayish" | "Good" | "Excellent";
+
+export type AiReview = {
+  currentApproach: string;
+  suggestedApproach: string;
+  keyIdea: string;
+  codeQualityRating: AiCodeQuality;
+  codeQualityComment: string;
+  timeComplexity: string;
+  spaceComplexity: string;
+  performanceTip: string;
+  correctnessConcern?: string;
+};
+
+export type AiHint = {
+  hints: string[];
+  codeIssues?: string[];
+  nextStep: string;
+};
+
+export async function aiReviewCode(input: { problemSlug: string; language: string; code: string }) {
+  return apiRequest<{ review: AiReview }>("/ai/review", {
+    method: "POST",
+    body: JSON.stringify(input),
+  });
+}
+
+export async function aiGetHint(input: { problemSlug: string; language: string; code: string }) {
+  return apiRequest<{ hint: AiHint }>("/ai/hint", {
+    method: "POST",
+    body: JSON.stringify(input),
+  });
+}
